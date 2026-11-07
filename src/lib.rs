@@ -33,6 +33,7 @@ pub mod datasets;
 pub mod estimate;
 pub mod extension;
 pub mod julia;
+pub mod model_extensions;
 pub mod params;
 pub mod random;
 
@@ -55,6 +56,8 @@ pub use data::{Data, DataVector};
 pub use datasets::{AUSTRIA2010Q1, ITALY2010Q1, InitialState, STEADY_STATE2010Q1};
 pub use extension::{Extension, Standard};
 pub use firms::FirmsDecisions;
+pub use model_extensions::canvas::{Canvas, ModelCANVAS};
+pub use model_extensions::growth_rate::{GrowthRate, ModelGR};
 pub use params::{InitialConditions, Parameters, Properties};
 pub use random::{Deterministic, Randomness, WeightVector, Xoshiro};
 
@@ -138,6 +141,31 @@ pub type Agents = (
     Data,
 );
 
+/// The agents of `Model(parameters, initial_conditions)`, built with their
+/// constructors `Workers(p, ic)`, `Firms(p, ic)` and so on; the model
+/// extensions start from them as well.
+pub(crate) fn agents_of_the_model<R: Randomness + ?Sized>(
+    p: &Parameters,
+    ic: &InitialConditions,
+    rng: &mut R,
+) -> Result<Agents, String> {
+    let prop = Properties::new(p, ic)?;
+    let firms = Firms::new(p, ic, rng)?;
+    let (w_act, w_inact) = Workers::new(p, ic);
+    Ok((
+        w_act,
+        w_inact,
+        firms,
+        Banks::new(p, ic),
+        CentralBank::new(p, ic),
+        Government::new(p, ic),
+        RestOfTheWorld::new(p, ic),
+        Aggregates::new(p, ic),
+        prop,
+        Data::default(),
+    ))
+}
+
 impl Model {
     /// `Model(parameters, initial_conditions)` (online appendix E): initial
     /// state and the first entry of [`AbstractModel::data`].
@@ -151,22 +179,7 @@ impl Model {
         ic: &InitialConditions,
         rng: &mut R,
     ) -> Result<Model, String> {
-        let prop = Properties::new(p, ic)?;
-        let firms = Firms::new(p, ic, rng)?;
-        let (w_act, w_inact) = Workers::new(p, ic);
-        let agents = (
-            w_act,
-            w_inact,
-            firms,
-            Banks::new(p, ic),
-            CentralBank::new(p, ic),
-            Government::new(p, ic),
-            RestOfTheWorld::new(p, ic),
-            Aggregates::new(p, ic),
-            prop,
-            Data::default(),
-        );
-        Model::from_agents(agents, Standard, rng)
+        Model::from_agents(agents_of_the_model(p, ic, rng)?, Standard, rng)
     }
 }
 

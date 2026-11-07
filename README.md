@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl` and `opt.jl` that these use; `positive.jl` |
-| Not yet ported | The model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); calibration with its data `ITALY_CALIBRATION`, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | Calibration with its data `ITALY_CALIBRATION`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the package extensions in `ext/` |
 
 ## Installation
 
@@ -91,6 +91,7 @@ cargo run --release --example austria
 |---|---|
 | `AUSTRIA2010Q1.parameters`, `AUSTRIA2010Q1.initial_conditions` | `Bit.AUSTRIA2010Q1.parameters`, `Bit.AUSTRIA2010Q1.initial_conditions` |
 | `Model::new(&p, &ic, &mut rng)` | `Model(parameters, initial_conditions)` |
+| `ModelCANVAS::new(&p, &ic, &mut rng)`, `ModelGR::new(&p, &ic, &mut rng)` | `ModelCANVAS(parameters, initial_conditions)`, `ModelGR(parameters, initial_conditions)` |
 | `p.n_banks = 3` before `Model::new` | `parameters["n_banks"] = 3` |
 | `model.step(&mut rng)` | `step!(model)` |
 | `model.step_with_shock(&mut rng, shock)` | `step!(model; shock!)` |
@@ -110,6 +111,17 @@ variable as in the Julia code: firm `i` is entry `i` of every firm list.
 Indices start at 0. Firms and persons also have IDs, as in BeforeIT
 `src/utils/modify.jl`: until an agent is deleted, its ID is its index, and
 afterwards `index(id)` gives its position.
+
+`ModelCANVAS` and `ModelGR` are BeforeIT.jl's model extensions
+(`src/model_extensions/`). In the CANVAS model (Hommes et al., 2025), firms
+set prices and quantities by demand pull, only a share `theta_calvo` of them
+adjusts prices in a quarter, and the central bank re-estimates the Taylor
+rule every quarter; its histories are in `model.ext` (BeforeIT.jl keeps
+them in `model.cb` and `model.rotw`). As in BeforeIT.jl, this estimate
+receives euro area GDP in levels where `estimate_taylor_rule` expects
+inflation, and inflation where it expects growth. The growth-rate model
+replaces the AR(1) processes on logarithms by AR(1) processes on growth
+rates for the expectations, government consumption, exports and imports.
 
 A shock is a closure that `step_with_shock` calls right after the central
 bank has set the policy rate, where `step!` calls `shock!`. BeforeIT.jl's
@@ -185,7 +197,10 @@ from the `libm` crate, not from the system's math library.
    than 1024 numbers are split in halves until blocks of at most 1024
    numbers remain, and each block is added from left to right. Julia may
    still reorder additions inside a block (`@simd`), and it calls BLAS for
-   dot products and norms, which the port adds from left to right. Results
+   dot products and norms, which the port adds from left to right, and
+   LAPACK for the singular value decomposition in `rfvar3` when the
+   regressors have more than two columns, which the port computes with
+   one-sided Jacobi rotations. Results
    can therefore differ from BeforeIT.jl in the last digits. The port has
    not been run side by side with Julia; it is checked against the reference
    values that the tests of BeforeIT.jl use (see [Verification](#verification)).
@@ -246,6 +261,13 @@ complete.
 - [`tests/utils.rs`](tests/utils.rs): adding and deleting agents and `pos`
   and `neg` as in `test/utils/modify.jl` and `test/utils/positive.jl`; that
   every ID still finds its agent after several deletions; and `DataVector`.
+- [`tests/model_extensions.rs`](tests/model_extensions.rs), as
+  `test/model_extensions.jl`: `ModelGR` with `AUSTRIA2010Q1` and
+  `ModelCANVAS` with `ITALY2010Q1` run; also, in both the accounting
+  identities hold, the CANVAS central bank stores the re-estimated Taylor
+  rule and extends its histories every quarter, `theta_calvo = 0` leaves
+  only expected inflation in the prices, and without shocks the growth
+  rates of the growth-rate model follow their AR(1) processes exactly.
 - [`tests/steady_state.rs`](tests/steady_state.rs), as
   `test/steady_state.jl`: with `STEADY_STATE2010Q1`, every national
   accounts series stays constant over five quarters within the tolerances
@@ -260,9 +282,13 @@ complete.
 - Unit tests in `src/`: the Julia semantics of `min`, `max`, `round`,
   `matlab_round`, `pos`, `neg`, `pos!`, `neg!` and the order of `sum`;
   xoshiro256\*\* and SplitMix64 against reference outputs; the
-  distributions of the draws; the Cholesky factor; `rfvar3` against the
-  values of BeforeIT.jl's tests; the shocks `epsilon` against the MATLAB
-  values in `test/deterministic/epsilon.jl`.
+  distributions of the draws; the Cholesky factor; `rfvar3`,
+  `estimate_for_calibration_script` and `estimate_taylor_rule` against the
+  values of BeforeIT.jl's tests (the last with regressors of rank 2, where
+  the pseudoinverse decides); the Jacobi SVD and `rfvar3` with two
+  variables, two lags and two exogenous series against exact data; the
+  shocks `epsilon` against the MATLAB values in
+  `test/deterministic/epsilon.jl`.
 
 The data sets and the reference values are converted from files of
 BeforeIT.jl by [`data/convert.py`](data/convert.py) and
@@ -289,6 +315,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/accounting.rs` | `src/utils/get_accounting_identities.jl` |
 | `src/datasets.rs`, `data/` | `src/utils/standard_params_initial_conditions.jl`, `data/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
+| `src/model_extensions/` | `src/model_extensions/` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
 | `src/julia.rs` | Julia's `min`, `max`, `round` and `sum`; `src/utils/positive.jl` |
 
