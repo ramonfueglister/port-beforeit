@@ -366,8 +366,9 @@ pub fn write_latex_table(
 
 /// A text cell as CSV.jl writes it: in quotes, with quotes doubled, if it
 /// is empty, begins or ends with a space, or contains a comma, a quote or
-/// a line break.
-fn csv_text(s: &str) -> String {
+/// a line break. Numbers are written as Julia prints them
+/// ([`float_string`]).
+pub fn csv_text(s: &str) -> String {
     let quote = s.is_empty()
         || s.starts_with(' ')
         || s.ends_with(' ')
@@ -1257,6 +1258,29 @@ fn select(src: &Table, name: &str, key: &str, mask: &[bool]) -> Result<Vec<f64>,
         .collect()
 }
 
+/// Julia `src[key][mask]` with `missing` as `None`.
+fn select_some(
+    src: &Table,
+    name: &str,
+    key: &str,
+    mask: &[bool],
+) -> Result<Vec<Option<f64>>, String> {
+    let a = series(src, name, key)?;
+    if a.data.len() != mask.len() {
+        return Err(format!(
+            "{name}[\"{key}\"] has {} entries, data[\"quarters_num\"] {} (Julia throws a BoundsError)",
+            a.data.len(),
+            mask.len()
+        ));
+    }
+    Ok(a.data
+        .iter()
+        .zip(mask)
+        .filter(|(_, m)| **m)
+        .map(|(x, _)| *x)
+        .collect())
+}
+
 fn table_of<'a>(spec: &VarSpec, data: &'a Table, ea: &'a Table) -> (&'a Table, &'static str) {
     match spec.source {
         Source::Data => (data, "data"),
@@ -1398,22 +1422,40 @@ fn for_each_forecast(
 }
 
 /// `Y0[from:end, :]` differenced, `diff(…; dims = 1)`, for the columns of
-/// `Y0`.
-fn differences(Y0: &[Vec<f64>], from: usize) -> Result<Vec<Vec<f64>>, String> {
+/// `Y0` (`None` for `missing`).
+///
+/// Returns an error if a value from row `from` on is missing: the
+/// differences are then a matrix with `missing` values, which Julia's
+/// `estimate_VAR` does not take (it throws a `MethodError`). Missing values
+/// in earlier rows are not used.
+fn differences(Y0: &[Vec<Option<f64>>], from: usize) -> Result<Vec<Vec<f64>>, String> {
     let rows = Y0.first().map_or(0, |c| c.len());
     if from > rows {
         return Err("too few quarters of data before the forecast (Julia throws)".into());
     }
-    Ok((from + 1..rows)
-        .map(|t| Y0.iter().map(|c| c[t] - c[t - 1]).collect())
+    let used: Option<Vec<Vec<f64>>> = Y0
+        .iter()
+        .map(|c| c[from..].iter().copied().collect())
+        .collect();
+    let used = used.ok_or_else(|| {
+        "a value of the data that the benchmark is estimated on is missing \
+         (Julia's estimate_VAR throws a MethodError)"
+            .to_string()
+    })?;
+    Ok((1..rows - from)
+        .map(|t| used.iter().map(|c| c[t] - c[t - 1]).collect())
         .collect())
 }
 
-/// `cumsum(x)`.
-fn cumsum(x: &[f64]) -> Vec<f64> {
-    let mut s = Vec::with_capacity(x.len());
+/// `cumsum(x)`, `missing` (`None`) from a missing value on.
+fn cumsum(x: &[Option<f64>]) -> Vec<Option<f64>> {
+    let mut s: Vec<Option<f64>> = Vec::with_capacity(x.len());
     for (t, v) in x.iter().enumerate() {
-        s.push(if t == 0 { *v } else { s[t - 1] + v });
+        s.push(if t == 0 {
+            *v
+        } else {
+            s[t - 1].zip(*v).map(|(a, b)| a + b)
+        });
     }
     s
 }
@@ -1422,13 +1464,29 @@ fn cumsum(x: &[f64]) -> Vec<f64> {
 /// `Y[end, :]`: the levels of the differenced variables `cols` at the
 /// horizon. The sums run from 0 in the order of the quarters (Julia adds
 /// within a column with `@simd`, which can change the last digit).
-fn last_forecast(Y0: &[Vec<f64>], Y: &[Vec<f64>], cols: &[usize]) -> Vec<f64> {
+///
+/// Returns an error if a last level is missing (Julia cannot store
+/// `missing` in `Y` and throws).
+fn last_forecast(
+    Y0: &[Vec<Option<f64>>],
+    Y: &[Vec<f64>],
+    cols: &[usize],
+) -> Result<Vec<f64>, String> {
     let mut out = Y.last().cloned().unwrap_or_default();
     for &l in cols {
         let s = Y.iter().fold(0.0, |acc, r| acc + r[l]);
-        out[l] = Y0[l].last().copied().unwrap_or(f64::NAN) + s;
+        let last = match Y0[l].last() {
+            Some(Some(x)) => *x,
+            Some(None) => {
+                return Err("the last value of a series before the forecast is missing \
+                     (Julia throws)"
+                    .to_string());
+            }
+            None => f64::NAN,
+        };
+        out[l] = last + s;
     }
-    out
+    Ok(out)
 }
 
 fn set_row(a: &mut Array3, i: usize, j: usize, values: &[f64]) {
@@ -1456,8 +1514,8 @@ fn error_table_benchmark(
     variable_names: &[&str],
     forecast_type: &str,
     model_type: &str,
-    columns: impl Fn(&[bool]) -> Result<Vec<Vec<f64>>, String>,
-    forecast: impl Fn(&[Vec<f64>], usize, usize) -> Result<Vec<f64>, String>,
+    columns: impl Fn(&[bool]) -> Result<Vec<Vec<Option<f64>>>, String>,
+    forecast: impl Fn(&[Vec<Option<f64>>], usize, usize) -> Result<Vec<f64>, String>,
 ) -> Result<(), String> {
     let size = [quarters.len(), horizons.len(), variable_names.len()];
     for k in 1..=3 {
@@ -1518,16 +1576,16 @@ pub fn error_table_ar(
     model_variant: &str,
 ) -> Result<(), String> {
     let presample = 4;
-    let columns = |mask: &[bool]| -> Result<Vec<Vec<f64>>, String> {
-        let logs = |key: &str| -> Result<Vec<f64>, String> {
-            Ok(select(data, "data", key, mask)?
+    let columns = |mask: &[bool]| -> Result<Vec<Vec<Option<f64>>>, String> {
+        let logs = |key: &str| -> Result<Vec<Option<f64>>, String> {
+            Ok(select_some(data, "data", key, mask)?
                 .into_iter()
-                .map(log)
+                .map(|x| x.map(log))
                 .collect())
         };
-        let rate: Vec<f64> = select(data, "data", "euribor", mask)?
+        let rate: Vec<Option<f64>> = select_some(data, "data", "euribor", mask)?
             .into_iter()
-            .map(quarterly_rate)
+            .map(|x| x.map(quarterly_rate))
             .collect();
         Ok(vec![
             logs("real_gdp_quarterly")?,
@@ -1537,19 +1595,20 @@ pub fn error_table_ar(
             cumsum(&rate),
         ])
     };
-    let forecast = |Y0: &[Vec<f64>], k: usize, horizon: usize| -> Result<Vec<f64>, String> {
-        let Y0_diff = differences(Y0, presample - k - 1)?;
-        let nv = Y0.len();
-        let mut Y = vec![vec![0.0; nv]; horizon];
-        for l in 0..nv {
-            let column: Vec<Vec<f64>> = Y0_diff.iter().map(|r| vec![r[l]]).collect();
-            let f = forecast_k_steps_VAR(&column, horizon, true, k, None);
-            for (t, r) in f.iter().enumerate() {
-                Y[t][l] = r[0];
+    let forecast =
+        |Y0: &[Vec<Option<f64>>], k: usize, horizon: usize| -> Result<Vec<f64>, String> {
+            let Y0_diff = differences(Y0, presample - k - 1)?;
+            let nv = Y0.len();
+            let mut Y = vec![vec![0.0; nv]; horizon];
+            for l in 0..nv {
+                let column: Vec<Vec<f64>> = Y0_diff.iter().map(|r| vec![r[l]]).collect();
+                let f = forecast_k_steps_VAR(&column, horizon, true, k, None);
+                for (t, r) in f.iter().enumerate() {
+                    Y[t][l] = r[0];
+                }
             }
-        }
-        Ok(last_forecast(Y0, &Y, &[0, 2, 3]))
-    };
+            last_forecast(Y0, &Y, &[0, 2, 3])
+        };
     error_table_benchmark(
         country,
         ea,
@@ -1590,9 +1649,10 @@ pub fn error_table_validation_var(
     model_variant: &str,
 ) -> Result<(), String> {
     let presample = 4;
-    let columns = |mask: &[bool]| -> Result<Vec<Vec<f64>>, String> {
+    let columns = |mask: &[bool]| -> Result<Vec<Vec<Option<f64>>>, String> {
         let apply = |t: &Table, name: &str, key: &str, f: fn(f64) -> f64| {
-            select(t, name, key, mask).map(|v| v.into_iter().map(f).collect::<Vec<f64>>())
+            select_some(t, name, key, mask)
+                .map(|v| v.into_iter().map(|x| x.map(f)).collect::<Vec<_>>())
         };
         Ok(vec![
             apply(data, "data", "real_gdp_quarterly", log)?,
@@ -1605,11 +1665,12 @@ pub fn error_table_validation_var(
             cumsum(&apply(data, "data", "euribor", quarterly_rate)?),
         ])
     };
-    let forecast = |Y0: &[Vec<f64>], k: usize, horizon: usize| -> Result<Vec<f64>, String> {
-        let Y0_diff = differences(Y0, presample - k)?;
-        let Y = forecast_k_steps_VAR(&Y0_diff, horizon, true, k, None);
-        Ok(last_forecast(Y0, &Y, &[0, 2, 3, 4, 5]))
-    };
+    let forecast =
+        |Y0: &[Vec<Option<f64>>], k: usize, horizon: usize| -> Result<Vec<f64>, String> {
+            let Y0_diff = differences(Y0, presample - k)?;
+            let Y = forecast_k_steps_VAR(&Y0_diff, horizon, true, k, None);
+            last_forecast(Y0, &Y, &[0, 2, 3, 4, 5])
+        };
     error_table_benchmark(
         country,
         ea,
@@ -2029,13 +2090,26 @@ mod tests {
     fn levels_from_differences() {
         // Two variables, the first differenced: last level 10 plus the
         // forecast differences 1 and 2.
-        let Y0 = vec![vec![8.0, 10.0], vec![0.1, 0.2]];
+        let Y0 = vec![vec![Some(8.0), Some(10.0)], vec![Some(0.1), Some(0.2)]];
         let Y = vec![vec![1.0, 0.3], vec![2.0, 0.4]];
-        assert_eq!(last_forecast(&Y0, &Y, &[0]), vec![13.0, 0.4]);
+        assert_eq!(last_forecast(&Y0, &Y, &[0]).unwrap(), vec![13.0, 0.4]);
+        let Y0 = vec![vec![Some(8.0), None]];
+        assert!(last_forecast(&Y0, &Y, &[0]).is_err());
+        let x = [None, Some(2.0), Some(4.0), Some(7.0)];
         assert_eq!(
-            differences(&[vec![1.0, 2.0, 4.0, 7.0]], 1).unwrap(),
+            differences(&[x.to_vec()], 1).unwrap(),
             vec![vec![2.0], vec![3.0]]
         );
-        assert_eq!(cumsum(&[1.0, 2.0, 3.0]), vec![1.0, 3.0, 6.0]);
+        // A missing value from the first row differenced on is used, as in
+        // Julia, where the differences then hold `missing`.
+        assert!(differences(&[x.to_vec()], 0).is_err());
+        assert_eq!(
+            cumsum(&[Some(1.0), Some(2.0), Some(3.0)]),
+            vec![Some(1.0), Some(3.0), Some(6.0)]
+        );
+        assert_eq!(
+            cumsum(&[Some(1.0), None, Some(3.0)]),
+            vec![Some(1.0), None, None]
+        );
     }
 }

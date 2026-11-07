@@ -9,6 +9,8 @@ Licensed under the Apache License, Version 2.0.
 
 The files in data and tests/data are converted from files of BeforeIT.jl
 (data and test/matlab_code); see data/README.md and tests/data/README.md.
+The files in examples/data are copied unchanged from examples/data of
+BeforeIT.jl.
 
 The changes with respect to BeforeIT.jl are described in README.md, section
 "Differences from BeforeIT.jl".

@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); the forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs of calibrations, simulations and predictions (`save_all_predictions.jl`); the model as one list of numbers and back (`diff_transform.jl`); the plots of the package extension `ext/BeforeITPlots` (feature `plots`); and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | the package extensions `ext/BeforeITFormat` and `ext/BeforeITMooncake` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); the forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs of calibrations, simulations and predictions (`save_all_predictions.jl`); the model as one list of numbers and back (`diff_transform.jl`); the plots of the package extension `ext/BeforeITPlots` (feature `plots`); the parts of `randpl.jl` and `opt.jl` that these use; and the examples of `examples/`, the script `main.jl` and `benchmark/benchmark_scalability.sh` (see [Examples](#examples)) |
+| No Rust counterpart | the package extension `ext/BeforeITMooncake`, rules for the automatic differentiation of Mooncake.jl, which the port does not have; `ext/BeforeITFormat`, `format.jl` and `pre_commit.sh`, which format the Julia sources (the port uses `cargo fmt`); `src/precompile.jl`, a precompilation workload (Rust compiles ahead of time); the documentation in `docs/`, which the rustdoc documentation replaces |
 
 ## Installation
 
@@ -305,7 +305,8 @@ with the fields of its Julia struct in their order, integers as floats and
 indices counted from 1 as in Julia. BeforeIT's examples
 `examples/automatic_differentiation_*.jl` compute gradients of a simulation
 with respect to these numbers, with Mooncake.jl (reverse mode) and with
-central finite differences; the port has no automatic differentiation.
+central finite differences; the port has no automatic differentiation, and
+its versions of the two examples compute the finite differences only.
 
 With the feature `plots`, the module `plots` has the functions of BeforeIT's
 package extension for Plots.jl: `plot_data` draws the series of one model,
@@ -318,7 +319,10 @@ and ticks that BeforeIT.jl hands to Plots.jl; `layout_svg` and
 `Plot::to_svg` draw them as SVG. For the plots of BeforeIT's examples,
 `Plot::new` starts an empty plot with Plots.jl's defaults, to which
 `add_line`, `add_errorline` (standard deviation or standard error),
-`add_hline` and `annotate` add elements; `Plot::heatmap` and `Plot::bars`
+`add_hline` and `annotate` add elements; its fields set the axis labels,
+limits, ticks (`x_rotation` rotates the labels of the x axis, `y_formatter`
+writes those of the y axis), logarithmic axes, minor grid lines and the
+legend (`legend`, `legend_frame`). `Plot::heatmap` and `Plot::bars`
 make heatmaps and bar plots, and `layout_svg_with_title` puts a title over
 a layout.
 
@@ -327,9 +331,16 @@ a layout.
 ## Examples
 
 The folder `examples/` has the examples of BeforeIT.jl's `examples/`, one
-Rust file for each Julia file, with its name in lower case. The examples
-with plots need the feature `plots` and write SVG files to
-`target/example-output/<example>`:
+Rust file for each Julia file, with its name in lower case; those of
+`examples/analysis/` keep their folders, and the two files
+`aggregate_forecast_results.jl` are the examples
+`tabs_aggregate_forecast_results` and `figs_aggregate_forecast_results`.
+`main` is the script `main.jl` at the top of BeforeIT.jl, and
+`benchmark_scalability` the measurement of its
+`benchmark/benchmark_scalability.sh`. The examples with plots need the
+feature `plots` and write SVG files instead of PNG or PDF files, to
+`target/example-output/<example>` or, for those that work in folders of
+the working directory as in Julia, to `target/example-output`:
 
 ```sh
 cargo run --release --features plots --example basic_example
@@ -348,6 +359,19 @@ cargo run --release --features plots --example basic_example
 | `multithreading_speedup` | `multithreading_speedup.jl` | no first run to compile, which Rust does ahead of time |
 | `canvas_extension` | `CANVAS_extension.jl` | each model has its own agents (see below) |
 | `conditional_forecasts` | `Conditional_forecasts.jl` | each model has its own agents (see below) |
+| `main` | `main.jl` at the top of BeforeIT.jl | |
+| `prediction_pipeline` | `prediction_pipeline.jl` | the field names that Julia lists with `fieldnames` are printed from a fixed list |
+| `prediction_pipeline_multiple` | `prediction_pipeline_multiple.jl` | works in `target/example-output` (see below) |
+| `compare_model_vs_real` | `compare_model_vs_real.jl` | reads a file of predictions that BeforeIT.jl does not contain (see below) |
+| `benchmark_w_matlab` | `benchmark_w_matlab.jl` | measures the port at scale 1:1000 in `f64`; the other bars are the numbers of the Julia example |
+| `simulate_and_create_tables` | `analysis/tabs/simulate_and_create_tables.jl` | needs a calibration object of the Zenodo record (see below) |
+| `simulate_and_create_tables_multicountry` | `analysis/tabs/simulate_and_create_tables_multicountry.jl` | needs calibration objects of the Zenodo record (see below) |
+| `tabs_aggregate_forecast_results` | `analysis/tabs/aggregate_forecast_results.jl` | reads the tables of `simulate_and_create_tables` and `simulate_and_create_tables_multicountry` (see below) |
+| `figs_aggregate_forecast_results` | `analysis/figs/aggregate_forecast_results.jl` | reads the tables of `simulate_and_create_tables` and `simulate_and_create_tables_multicountry` (see below) |
+| `crosscorrelations` | `analysis/figs/crosscorrelations.jl` | needs a calibration object of the Zenodo record (see below) |
+| `automatic_differentiation_perf` | `automatic_differentiation_perf.jl` | plots the times saved by BeforeIT.jl; `--run` times the finite differences of the port in `f64` (see below) |
+| `automatic_differentiation_opt` | `automatic_differentiation_opt.jl` | plots the results saved by BeforeIT.jl; `--run` reruns the finite differences of the port in `f64` (see below) |
+| `benchmark_scalability` | `benchmark/benchmark_scalability.sh` | started by the port's `benchmark/benchmark_scalability.sh`, which runs 1 to 6 threads, at most the number of logical CPUs (`nproc`), by limiting the logical CPUs with `taskset` (Linux); the ensemble starts up to the square of that number of threads (see the example) |
 
 A model type of BeforeIT.jl (`Bit.@object struct NewModel(Bit.Model)`) with
 its own methods is a type that implements `Extension`, and the fields that
@@ -364,11 +388,75 @@ of the firm owners and the inactive households by the total income once
 more. In the last two examples the models also share one state while they
 run. In the Rust examples each model has its own copy of the agents.
 
-The Julia examples above draw their random numbers from Julia's global
-generator, `change_expectations.jl` with the seed 1234 and the others
-without a seed. The Rust examples seed `Xoshiro` with 1, or with 1234
-where Julia does, so each run gives the same numbers; they are not those
-of a Julia run, whose generator differs.
+The Julia examples draw their random numbers from Julia's global
+generator: `change_expectations.jl` with the seed 1234, the two
+`automatic_differentiation_*.jl` with the seeds 42, 43, … and 10 001 to
+10 010, the others without a seed. The Rust examples seed `Xoshiro` with
+1, or with the seeds of Julia where it has them (a new generator for each
+`Random.seed!`), so each run gives the same numbers; they are not those of
+a Julia run, whose generator differs.
+
+The examples `prediction_pipeline_multiple`, `compare_model_vs_real` and
+those of `analysis/` read and write folders of the working directory, as
+in Julia, such as `data/italy` or `data/AT`; the port makes
+`target/example-output` the working directory and writes JSON files
+instead of JLD2 files. Like the Julia examples,
+`prediction_pipeline_multiple`, `simulate_and_create_tables` and
+`crosscorrelations` **delete the folder `data/<country>` there first** if
+it exists, and `simulate_and_create_tables_multicountry` deletes it if it
+has no folder `parameters`. `compare_model_vs_real.jl` reads the
+predictions from 2015Q1 in `data/italy/abm_predictions/2015Q1.jld2`, a
+file that BeforeIT.jl does not contain; the Rust example reads the JSON
+file of the same name, or the file given as argument, such as one that
+`prediction_pipeline_multiple` writes for 2014Q1 to 2014Q4.
+
+`simulate_and_create_tables`, `simulate_and_create_tables_multicountry`
+and `crosscorrelations` download in Julia the calibration objects of
+Austria, Italy and Spain from the Zenodo record
+(`download_zenodo_calibration_object`). The port reads neither HTTP nor
+JLD2: download the files `<country>_calibration_object.jld2` of the record,
+convert them with `data/convert_calibration.py` (see `data/README.md`) to
+`<country>.json` and set `BEFOREIT_CALIBRATION_DIR` to their folder (a
+relative folder is taken from the directory where the example is started):
+
+```sh
+curl -LO https://zenodo.org/records/18698434/files/AT_calibration_object.jld2
+python3 data/convert_calibration.py zenodo AT_calibration_object.jld2 AT.json
+BEFOREIT_CALIBRATION_DIR=. cargo run --release --example simulate_and_create_tables
+```
+
+BeforeIT's calibration stores the GDP deflators in the calibration object
+it is given, and the later steps of these examples read them; the Rust
+examples call `set_gdp_deflators` where Julia's later steps see the changed
+object. With their settings, the Julia analysis examples do not fit
+together: the two `simulate_and_create_tables*.jl` write the tables of
+`ModelCANVAS`, the two `aggregate_forecast_results.jl` read those of
+`Model`, and the error tables count a forecast only if its quarter lies
+within the year of the last quarter of the list, so with the quarters of
+`simulate_and_create_tables_multicountry.jl` (2010Q1 to 2011Q1) they have
+no value at 12 quarters, the horizon that `aggregate_forecast_results.jl`
+gathers. The Rust examples keep these settings. With a later end, such as
+the commented 2019Q4 of `simulate_and_create_tables.jl`, and the variant
+`"ModelCANVAS"` in the aggregating examples, the chain runs through.
+With a list of quarters that leaves at least two forecasts at a horizon
+but fewer than the horizon has quarters, such as 2010Q1 to 2013Q1 in
+`simulate_and_create_tables_multicountry.jl` (four forecasts at 12
+quarters), the Diebold-Mariano test throws in Julia, and the port returns
+an error; with no forecast or one, the p-value is NaN.
+
+`automatic_differentiation_perf` and `automatic_differentiation_opt` plot,
+as in Julia, the results that BeforeIT.jl saved in
+`examples/data/autodiff_performance.csv` and
+`examples/data/autodiff_optimization.csv` (copied unchanged): times and
+results of the Mooncake gradient in Float64 and of finite differences in
+Float64 and Float128. The port has no automatic differentiation and
+computes only in `f64`: `--run` (or `--run float64`) reruns the finite
+differences in `f64` with the port, where Julia's `--run` reruns all three,
+and `auto` and `float128` return an error. Julia replaces the rows of the
+rerun in its saved file; the port writes the saved results with the rows
+of the rerun replaced to `target/example-output/<example>/` and plots this
+copy if it exists, so that the plot then shows the port's finite
+differences next to Julia's other results.
 
 ## Randomness and reproducibility
 
@@ -444,7 +532,12 @@ from the `libm` crate, not from the system's math library.
    xoshiro256\*\* (2^128 draws ahead), runs them on system threads and adds
    the products' results in the order of the products, as the serial
    version does. Without randomness, parallel and serial runs are
-   therefore identical.
+   therefore identical. Julia's tasks share the threads Julia was started
+   with; the port starts as many system threads at once as
+   `std::thread::available_parallelism` gives, for the products of one
+   model and for the models of `ensemblerun`, whose models each run their
+   goods markets in parallel, so that an ensemble can have the square of
+   that number of threads at once.
 7. **Calibration.** Where BeforeIT.jl would throw (for example for a date
    that is not in the data) or would carry a `missing` value of the data
    into a parameter, the port returns an error message. BeforeIT.jl stores
@@ -463,6 +556,10 @@ from the `libm` crate, not from the system's math library.
    tables print what BeforeIT.jl logs with `@warn` to standard error and
    return errors where Julia throws; `save_all_simulations` skips a quarter
    whose model returns an error or panics, as Julia catches the exception.
+   The AR and VAR benchmarks of the error tables accept a `missing` value
+   of the data in rows that their estimation does not use, as Julia does
+   (its broadcast narrows the type of the differences), and return an
+   error for one in the rows used, where Julia's `estimate_VAR` throws.
    The CSV reader of `load_country_forecast_data` knows numbers and text
    only (CSV.jl also recognises dates and booleans, which the tables do not
    contain), and returns an error for a line with too few or too many
@@ -483,9 +580,9 @@ from the `libm` crate, not from the system's math library.
     legend goes to the least crowded corner, as in Plots.jl; fonts,
     margins, axes, dash patterns and the format of the tick numbers are
     those of `plotters` (large and small numbers with a power of ten, such
-    as `3.95e11`); tick labels are not rotated, a line that leaves the x
-    limits ends at its last point inside them, and heatmaps have no colour
-    bar. The functions return an error where Julia throws, also for a
+    as `3.95e11`); rotated tick labels are SVG text next to the drawing of
+    `plotters`, a line that leaves the x limits ends at its last point
+    inside them, and heatmaps have no colour bar. The functions return an error where Julia throws, also for a
     `missing` value of the data within the period of the predictions in
     `plot_model_vs_real`.
 
@@ -653,7 +750,9 @@ keeps:
   `examples/automatic_differentiation_opt.jl` changes exactly one number at
   its position; the round trip from one model into another of the same
   shape; Julia's rounding of integers and `Bool`s; and the length of the
-  list.
+  list, which for a new model of Austria 2010Q1 is 115 829 numbers, the
+  largest `n` in BeforeIT's saved results
+  `examples/data/autodiff_performance.csv`.
 - Unit tests of `plots`, with `--features plots`: the mean and standard
   deviation of StatsPlots' `errorline` (NaN ignored, as NaNMath.jl does)
   and its handling of the shape of `y`; the titles, series, colours and
@@ -662,8 +761,10 @@ keeps:
   `crop`; the colours of the gradients RdBu and YlOrRd and of heatmap
   cells; the corner of the legend; the ticks and minor ticks of linear and
   logarithmic axes and the widening of their limits; and that the SVG
-  drawings contain the titles, bands, labels, ticks, annotations and
-  markers. The drawings were also checked by eye in a browser.
+  drawings contain the titles, bands, labels, ticks (also rotated and
+  written by a formatter), annotations and markers, a legend with or
+  without frame, and horizontal lines between the series added before and
+  after them. The drawings were also checked by eye in a browser.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -694,7 +795,10 @@ for byte. CI checks the formatting and runs `cargo clippy` (with and without the
 feature `plots`) and the tests with all features on stable Rust, and the
 tests with all features on Rust 1.88.
 
-Each example was run and its plots were looked at in a browser. CI
+Each example was run (those of `analysis/` with the calibration objects of
+Austria, Italy and Spain of the Zenodo record, the two
+`automatic_differentiation_*` also with `--run`, `benchmark_scalability`
+with 1 to 4 threads) and its plots were looked at in a browser. CI
 compiles the examples (`cargo clippy --all-targets`, `cargo test`) but does
 not run them, and their output is not compared with that of Julia.
 
@@ -729,7 +833,7 @@ not run them, and their output is not compared with that of Julia.
 | `src/model_extensions/` | `src/model_extensions/` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
 | `src/julia.rs` | Julia's `min`, `max`, `round`, `sum`, `x^n` and `string(x)` of a float; `src/utils/positive.jl` |
-| `examples/` | `examples/`; the example in the README |
+| `examples/`, `examples/data/`, `benchmark/` | `examples/` with the saved results in `examples/data/` (copied unchanged), `main.jl`, `benchmark/benchmark_scalability.sh`; the example in the README |
 
 ## Citation
 

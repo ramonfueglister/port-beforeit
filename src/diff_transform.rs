@@ -557,6 +557,14 @@ mod tests {
     }
 
     #[test]
+    fn length_as_in_julia() {
+        // BeforeIT `examples/data/autodiff_performance.csv` times the
+        // gradient with respect to the whole array of a new model of Austria
+        // 2010Q1, `length(model_arr)` numbers (its largest `n`).
+        assert_eq!(model_to_array(&model(42)).len(), 115_829);
+    }
+
+    #[test]
     fn numbers_as_in_julia() {
         let m = stepped(model(1), 2);
         let arr = model_to_array(&m);

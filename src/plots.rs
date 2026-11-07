@@ -87,6 +87,9 @@ const TITLE_FONT: u32 = 14;
 const TICK_FONT: u32 = 8;
 const GUIDE_FONT: u32 = 11;
 const LEGEND_FONT: u32 = 8;
+/// Length in pixels of the line of a series in the legend, within the 30
+/// pixels that `plotters` leaves before the label.
+const LEGEND_LINE: i32 = 24;
 const PLOT_TITLE_FONT: u32 = 16;
 
 /// Plots.jl's `plot_titlevspan`: the share of the height that the title
@@ -233,6 +236,10 @@ pub struct HLine {
     pub color: Color,
     pub line_style: LineStyle,
     pub line_width: f64,
+    /// The number of series drawn before the line, which covers them and
+    /// lies under the later series: Plots.jl draws its series and lines in
+    /// the order they were added.
+    pub after_series: usize,
 }
 
 /// A colour gradient of ColorSchemes.jl.
@@ -364,6 +371,18 @@ pub struct Bars {
     pub labels: Vec<String>,
 }
 
+/// A function from the value of a tick to its text, Plots.jl's
+/// `formatter`. Two are equal if they are the same function
+/// ([`std::ptr::fn_addr_eq`]).
+#[derive(Clone, Copy, Debug)]
+pub struct TickFormatter(pub fn(f64) -> String);
+
+impl PartialEq for TickFormatter {
+    fn eq(&self, other: &TickFormatter) -> bool {
+        std::ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
 /// One plot, the attributes that BeforeIT.jl passes to Plots.jl.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plot {
@@ -373,6 +392,9 @@ pub struct Plot {
     /// Font size of the ticks in points.
     pub tick_font: u32,
     pub legend: Legend,
+    /// A frame around the legend; Plots.jl's `foreground_color_legend =
+    /// nothing` removes it.
+    pub legend_frame: bool,
     /// Axis labels, Plots.jl's `xlabel` and `ylabel`; empty for none.
     pub x_label: String,
     pub y_label: String,
@@ -382,10 +404,15 @@ pub struct Plot {
     /// Positions and labels of the ticks; `None`: automatic.
     pub x_ticks: Option<(Vec<f64>, Vec<String>)>,
     pub y_ticks: Option<(Vec<f64>, Vec<String>)>,
-    /// Rotation of the tick labels on the x axis in degrees, Plots.jl's
-    /// `xrotation`. The SVG drawing does not rotate them: `plotters` turns
-    /// text by multiples of 90 degrees only.
+    /// Rotation of the tick labels on the x axis in degrees, counter-clockwise,
+    /// Plots.jl's `xrotation`: each label then ends (counter-clockwise) or
+    /// starts (clockwise) below its tick, as Plots.jl's GR backend places
+    /// labels turned by -90 to 90 degrees.
     pub x_rotation: f64,
+    /// The text of each automatic tick of the y axis, Plots.jl's
+    /// `yformatter`; `None`: the numbers as `plotters` writes them. Not
+    /// used for given ticks (`y_ticks`).
+    pub y_formatter: Option<TickFormatter>,
     /// Logarithmic axes, Plots.jl's `xscale = :log10` and `yscale =
     /// :log10`; values that are not positive leave a gap.
     pub x_log: bool,
@@ -413,6 +440,7 @@ impl Plot {
             title_font: TITLE_FONT,
             tick_font: TICK_FONT,
             legend: Legend::Best,
+            legend_frame: true,
             x_label: String::new(),
             y_label: String::new(),
             x_limits: None,
@@ -420,6 +448,7 @@ impl Plot {
             x_ticks: None,
             y_ticks: None,
             x_rotation: 0.0,
+            y_formatter: None,
             x_log: false,
             y_log: false,
             x_grid: true,
@@ -521,6 +550,7 @@ impl Plot {
             color,
             line_style,
             line_width: 1.0,
+            after_series: self.series.len(),
         });
     }
 
@@ -589,6 +619,7 @@ fn layout_with(
         ));
     }
     let mut svg = String::new();
+    let mut extra = String::new();
     {
         let root = SVGBackend::with_string(&mut svg, size).into_drawing_area();
         root.fill(&WHITE).map_err(|e| e.to_string())?;
@@ -610,11 +641,25 @@ fn layout_with(
         };
         let cells = area.split_evenly((rows, cols));
         for (p, cell) in plots.iter().zip(&cells) {
-            draw(p, cell)?;
+            draw(p, cell, &mut extra)?;
         }
         root.present().map_err(|e| e.to_string())?;
     }
+    // The elements that `plotters` cannot draw, before the end of the
+    // document.
+    match svg.rfind("</svg>") {
+        Some(end) => svg.insert_str(end, &extra),
+        None => return Err("plotters wrote no SVG document".to_string()),
+    }
     Ok(svg)
+}
+
+/// The text with the characters that XML reserves escaped.
+fn xml_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// `get_plot_title(quantity)`.
@@ -1104,6 +1149,7 @@ struct Axis {
     log: bool,
     ticks: Option<(Vec<f64>, Vec<String>)>,
     minor: bool,
+    format: Option<TickFormatter>,
 }
 
 impl Axis {
@@ -1133,7 +1179,7 @@ impl Axis {
                 let (first, last) = (a.log10().ceil() as i32, b.log10().floor() as i32);
                 (first..=last).map(|k| 10f64.powi(k)).collect()
             }
-            None => self.linear().key_points(n),
+            None => snap_to_step(self.linear().key_points(n)),
         }
     }
 
@@ -1198,9 +1244,36 @@ impl Axis {
                 .position(|&q| q == v)
                 .and_then(|k| labels.get(k).cloned())
                 .unwrap_or_default(),
-            None => short_number(&v),
+            None => self
+                .format
+                .map_or_else(|| short_number(&v), |TickFormatter(f)| f(v)),
         }
     }
+}
+
+/// The ticks of `plotters` rounded to one decimal more than their step:
+/// `plotters` adds the step to the first tick, which leaves rounding noise,
+/// such as -5.6e-17 for the tick 0 of -0.4, -0.2, ….
+fn snap_to_step(ticks: Vec<f64>) -> Vec<f64> {
+    if ticks.len() < 2 {
+        return ticks;
+    }
+    let step = (ticks[1] - ticks[0]).abs();
+    if !(step.is_finite() && step > 0.0) {
+        return ticks;
+    }
+    let digits = 1 - step.log10().floor() as i32;
+    let snap = |v: f64| {
+        // `+ 0.0` makes -0.0 a 0.0.
+        if digits >= 0 {
+            let s = 10f64.powi(digits);
+            (v * s).round() / s + 0.0
+        } else {
+            let s = 10f64.powi(-digits);
+            (v / s).round() * s + 0.0
+        }
+    };
+    ticks.into_iter().map(snap).collect()
 }
 
 /// `start + k * step` for `k = 0, 1, …` up to `stop`, Julia's
@@ -1371,7 +1444,14 @@ where
     .map_err(|e| e.to_string())
 }
 
-fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(), String> {
+/// Draws the plot on `area`; SVG elements that `plotters` cannot draw (the
+/// rotated tick labels) are appended to `extra`, in the pixels of the whole
+/// document.
+fn draw<DB: DrawingBackend>(
+    p: &Plot,
+    area: &DrawingArea<DB, Shift>,
+    extra: &mut String,
+) -> Result<(), String> {
     let err = |e: DrawingAreaErrorKind<DB::ErrorType>| e.to_string();
     let (x0, x1) = x_range(p);
     let (y0, y1) = y_range(p);
@@ -1381,6 +1461,7 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
         log: p.x_log,
         ticks: p.x_ticks.clone(),
         minor: false,
+        format: None,
     };
     let y_axis = Axis {
         lo: y0,
@@ -1388,6 +1469,7 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
         log: p.y_log,
         ticks: p.y_ticks.clone(),
         minor: p.y_minor_grid,
+        format: p.y_formatter,
     };
     const N_TICKS: usize = 6;
     let tick_px = font_px(p.tick_font);
@@ -1409,6 +1491,8 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
         .max()
         .unwrap_or(1);
     let multi_line = x_lines > 1;
+    let rotation = p.x_rotation % 360.0;
+    let rotated = rotation != 0.0;
     let guide = |label: &str| {
         if label.is_empty() {
             0.0
@@ -1416,7 +1500,25 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
             1.5 * guide_px
         }
     };
-    let x_area = tick_px * (1.25 * x_lines as f64 + 0.75) + guide(&p.x_label);
+    // The font size that `plotters`' SVG backend writes for `tick_px`, and
+    // rotated labels as boxes of 0.55 font sizes per character and 1.2 per
+    // line.
+    let font_size = tick_px / 1.24;
+    let label_height = 1.2 * font_size * x_lines as f64;
+    let x_area = if rotated {
+        let chars = x_labels
+            .iter()
+            .flat_map(|l| l.split('\n'))
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
+        let (sin, cos) = rotation.to_radians().sin_cos();
+        6.0 + 0.55 * font_size * chars as f64 * sin.abs()
+            + label_height * cos.abs()
+            + guide(&p.x_label)
+    } else {
+        tick_px * (1.25 * x_lines as f64 + 0.75) + guide(&p.x_label)
+    };
     let y_area = tick_px * (0.6 * y_chars as f64 + 1.0) + guide(&p.y_label);
 
     let mut builder = ChartBuilder::on(area);
@@ -1446,13 +1548,42 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
     if !p.x_grid {
         mesh.disable_x_mesh();
     }
-    if multi_line {
+    if multi_line || rotated {
         mesh.x_label_formatter(&no_label);
     }
     mesh.draw().map_err(err)?;
 
-    // Tick labels of several lines, which `plotters` writes on one.
-    if multi_line {
+    if rotated {
+        // Rotated tick labels, which `plotters` turns by multiples of 90
+        // degrees only, as SVG text: turned about the upper corner of the
+        // label next to the tick, its upper right corner for a
+        // counter-clockwise rotation and its upper left corner for a
+        // clockwise one, which Plots.jl's GR backend places half the height
+        // of the label times the sine of the angle left or right of the
+        // tick, so that the middle line of the label ends below the tick
+        // (`gr_label_ticks`).
+        let bottom = if y0 <= y1 { y0 } else { y1 };
+        let anchor = if rotation > 0.0 { "end" } else { "start" };
+        let shift = 0.5 * label_height * rotation.to_radians().sin();
+        for (v, label) in x_axis.ticks(N_TICKS).iter().zip(&x_labels) {
+            let (px, py) = chart.backend_coord(&(*v, bottom));
+            let (x, y) = (f64::from(px) - shift, f64::from(py) + 6.0);
+            extra.push_str(&format!(
+                "<text x=\"{x}\" y=\"{y}\" text-anchor=\"{anchor}\" font-family=\"sans-serif\" \
+                 font-size=\"{font_size}\" fill=\"#000000\" transform=\"rotate({}, {x}, {y})\">",
+                -rotation
+            ));
+            for (k, line) in label.split('\n').enumerate() {
+                let dy = if k == 0 { "0.76em" } else { "1.2em" };
+                extra.push_str(&format!(
+                    "<tspan x=\"{x}\" dy=\"{dy}\">{}</tspan>",
+                    xml_text(line)
+                ));
+            }
+            extra.push_str("</text>\n");
+        }
+    } else if multi_line {
+        // Tick labels of several lines, which `plotters` writes on one.
         let base = area.get_base_pixel();
         let bottom = if y0 <= y1 { y0 } else { y1 };
         let style = ("sans-serif", tick_px)
@@ -1509,7 +1640,23 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
     }
 
     let inside = |x: f64| x_axis.contains(x);
-    for s in &p.series {
+    let draw_hlines = |after: &dyn Fn(usize) -> bool| -> Result<(), String> {
+        for h in p.hlines.iter().filter(|h| after(h.after_series)) {
+            if drawable(h.y, p.y_log) && y_axis_contains(y0, y1, h.y) {
+                let style = line_style(h.color.rgb(), h.line_width);
+                draw_path(
+                    &plotting,
+                    vec![(x0, h.y), (x1, h.y)],
+                    style,
+                    h.line_style,
+                    h.line_width,
+                )?;
+            }
+        }
+        Ok(())
+    };
+    for (k, s) in p.series.iter().enumerate() {
+        draw_hlines(&|after| after == k)?;
         let color = s.color.rgb();
         if let Some(r) = &s.ribbon {
             let ok = |k: usize| {
@@ -1539,18 +1686,7 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
             }
         }
     }
-    for h in &p.hlines {
-        if drawable(h.y, p.y_log) && y_axis_contains(y0, y1, h.y) {
-            let style = line_style(h.color.rgb(), h.line_width);
-            draw_path(
-                &plotting,
-                vec![(x0, h.y), (x1, h.y)],
-                style,
-                h.line_style,
-                h.line_width,
-            )?;
-        }
-    }
+    draw_hlines(&|after| after >= p.series.len())?;
     for a in &p.annotations {
         let style = ("sans-serif", font_px(a.font))
             .into_font()
@@ -1575,13 +1711,21 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
             let color = s.color.rgb();
             let style = line_style(color, s.line_width);
             let marker = s.marker;
+            // The dash pattern of `draw_path`; a solid line is one dash
+            // longer than the line.
+            let w = s.line_width.max(1.0);
+            let (dash, gap) = match s.line_style {
+                LineStyle::Solid => (f64::from(LEGEND_LINE + 1), 1.0),
+                LineStyle::Dash => (6.0 * w, 4.0 * w),
+                LineStyle::Dot => (w, 2.0 * w),
+            };
             chart
                 .draw_series(std::iter::empty::<PathElement<(f64, f64)>>())
                 .map_err(err)?
                 .label(s.label.clone().unwrap_or_default())
                 .legend(move |(x, y)| {
                     EmptyElement::at((x, y))
-                        + PathElement::new(vec![(0, 0), (15, 0)], style)
+                        + DashedPathElement::new(vec![(0, 0), (LEGEND_LINE, 0)], dash, gap, style)
                         + legend_marker(marker, color)
                 });
         }
@@ -1590,7 +1734,11 @@ fn draw<DB: DrawingBackend>(p: &Plot, area: &DrawingArea<DB, Shift>) -> Result<(
             .position(position)
             .label_font(("sans-serif", font_px(LEGEND_FONT)))
             .background_style(WHITE.mix(0.8))
-            .border_style(BLACK.mix(0.3))
+            .border_style(if p.legend_frame {
+                BLACK.mix(0.3)
+            } else {
+                TRANSPARENT
+            })
             .draw()
             .map_err(err)?;
     }
@@ -1649,20 +1797,21 @@ fn draw_marker<DB: DrawingBackend>(
 
 /// The marker of a series in the legend, smaller than in the plot.
 fn legend_marker(marker: Marker, color: RGBColor) -> Polygon<(i32, i32)> {
+    let centre = LEGEND_LINE / 2;
     let points = match marker {
         Marker::None => Vec::new(),
         Marker::Circle => (0..12)
             .map(|k| {
                 let a = k as f64 * std::f64::consts::PI / 6.0;
                 (
-                    (7.5 + 3.0 * a.cos()).round() as i32,
+                    (f64::from(centre) + 3.0 * a.cos()).round() as i32,
                     (3.0 * a.sin()).round() as i32,
                 )
             })
             .collect(),
         _ => marker_polygon(marker, 3.0)
             .into_iter()
-            .map(|(x, y)| (x + 7, y))
+            .map(|(x, y)| (x + centre, y))
             .collect(),
     };
     Polygon::new(points, color.filled())
@@ -1981,6 +2130,7 @@ mod tests {
             log,
             ticks: None,
             minor,
+            format: None,
         };
         // Powers of ten on a logarithmic axis, with 2, …, 9 times them as
         // minor ticks, also before the first tick.
@@ -2011,6 +2161,15 @@ mod tests {
             ("b".to_string(), String::new())
         );
         assert!(axis(0.0, 1.0, false, false).minor_ticks(6).is_empty());
+        // The ticks of `plotters` without rounding noise: an exact 0.
+        let t = axis(-0.5, 0.75, false, false).ticks(6);
+        assert!(t.contains(&0.0), "{t:?}");
+        assert!(t.iter().all(|v| (v * 10.0).round() == v * 10.0), "{t:?}");
+        assert_eq!(
+            snap_to_step(vec![-0.4, -0.2, -5.551e-17, 0.2]),
+            [-0.4, -0.2, 0.0, 0.2]
+        );
+        assert_eq!(snap_to_step(vec![1e11, 2e11 + 3e-5]), [1e11, 2e11]);
         assert_eq!(axis(1.0, 100.0, true, false).map(&10.0, (0, 100)), 50);
         assert_eq!(
             auto_range([0.0, -1.0, 10.0].into_iter(), true, false),
@@ -2074,5 +2233,39 @@ mod tests {
         assert!(l.to_svg(DEFAULT_SIZE).unwrap().contains("<circle"));
         assert_eq!(short_number(&395e9), "3.95e11");
         assert_eq!(short_number(&2.5e-5), "2.5e-5");
+        // Rotated tick labels of two lines, as SVG text.
+        let mut r = Plot::heatmap(vec![vec![1.0, 2.0]], Gradient::YlOrRd);
+        r.x_ticks = Some((vec![1.0, 2.0], vec!["Real\nGDP".into(), "Euribor".into()]));
+        r.x_rotation = 45.0;
+        let svg = r.to_svg(DEFAULT_SIZE).unwrap();
+        assert!(svg.contains("rotate(-45, "), "rotated labels");
+        for text in ["Real", "GDP", "Euribor"] {
+            assert!(svg.contains(&format!(">{text}</tspan>")), "{text}");
+        }
+        assert!(svg.trim_end().ends_with("</svg>"));
+        // Clockwise: each label starts below its tick, its upper left corner
+        // half its height times the sine of the angle right of the tick.
+        r.x_rotation = -30.0;
+        let svg = r.to_svg(DEFAULT_SIZE).unwrap();
+        assert!(svg.contains("rotate(30, ") && svg.contains("text-anchor=\"start\""));
+        // The text of the ticks of the y axis, and a legend without frame.
+        fn percent(y: f64) -> String {
+            format!("{}%", julia::round(y) as i64)
+        }
+        let mut f = Plot::new("");
+        f.add_line(vec![1.0, 2.0], vec![-10.0, 50.0]).label = Some("a".into());
+        f.y_formatter = Some(TickFormatter(percent));
+        let framed = f.to_svg(DEFAULT_SIZE).unwrap();
+        assert!(framed.contains("\n0%\n"), "formatted ticks");
+        f.legend_frame = false;
+        assert_ne!(f.to_svg(DEFAULT_SIZE).unwrap(), framed);
+        // A line drawn between the series added before and after it.
+        let mut o = Plot::new("");
+        o.add_line(vec![1.0, 2.0], vec![1.0, 2.0]).color = Color::Rgb(1, 2, 3);
+        o.add_hline(1.5, Color::Rgb(7, 8, 9), LineStyle::Solid);
+        o.add_line(vec![1.0, 2.0], vec![2.0, 1.0]).color = Color::Rgb(4, 5, 6);
+        let svg = o.to_svg(DEFAULT_SIZE).unwrap();
+        let at = |c: &str| svg.find(c).unwrap_or_else(|| panic!("{c}"));
+        assert!(at("#010203") < at("#070809") && at("#070809") < at("#040506"));
     }
 }

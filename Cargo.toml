@@ -9,7 +9,7 @@ repository = "https://github.com/ramonfueglister/port-beforeit"
 readme = "README.md"
 keywords = ["agent-based-model", "macroeconomics", "economics", "simulation", "forecasting"]
 categories = ["simulation", "science"]
-include = ["src/**", "data/**", "tests/**", "examples/**", "README.md", "LICENSE", "NOTICE", "CITATION.cff"]
+include = ["src/**", "data/**", "tests/**", "examples/**", "benchmark/**", "README.md", "LICENSE", "NOTICE", "CITATION.cff"]
 publish = false
 
 [features]
@@ -21,8 +21,12 @@ libm = "0.2.16"
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 plotters = { version = "0.3.7", default-features = false, features = ["svg_backend"], optional = true }
 
-# The examples of BeforeIT.jl (examples/); those that draw plots need the
-# feature plots.
+# The examples of BeforeIT.jl (examples/) and its script main.jl; those
+# that draw plots need the feature plots.
+[[example]]
+name = "main"
+required-features = ["plots"]
+
 [[example]]
 name = "basic_example"
 required-features = ["plots"]
@@ -53,4 +57,54 @@ required-features = ["plots"]
 
 [[example]]
 name = "conditional_forecasts"
+required-features = ["plots"]
+
+[[example]]
+name = "prediction_pipeline"
+required-features = ["plots"]
+
+[[example]]
+name = "prediction_pipeline_multiple"
+required-features = ["plots"]
+
+[[example]]
+name = "compare_model_vs_real"
+required-features = ["plots"]
+
+[[example]]
+name = "benchmark_w_matlab"
+required-features = ["plots"]
+
+[[example]]
+name = "simulate_and_create_tables"
+path = "examples/analysis/tabs/simulate_and_create_tables.rs"
+
+[[example]]
+name = "simulate_and_create_tables_multicountry"
+path = "examples/analysis/tabs/simulate_and_create_tables_multicountry.rs"
+
+[[example]]
+name = "tabs_aggregate_forecast_results"
+path = "examples/analysis/tabs/aggregate_forecast_results.rs"
+
+[[example]]
+name = "figs_aggregate_forecast_results"
+path = "examples/analysis/figs/aggregate_forecast_results.rs"
+required-features = ["plots"]
+
+[[example]]
+name = "crosscorrelations"
+path = "examples/analysis/figs/crosscorrelations.rs"
+required-features = ["plots"]
+
+[[example]]
+name = "automatic_differentiation_perf"
+required-features = ["plots"]
+
+[[example]]
+name = "automatic_differentiation_opt"
+required-features = ["plots"]
+
+[[example]]
+name = "benchmark_scalability"
 required-features = ["plots"]
