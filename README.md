@@ -19,9 +19,9 @@ European Economic Review 151, 104306.
 ## The model
 
 The model simulates an economy quarter by quarter. Its agents are households
-(employed and unemployed workers, inactive persons, the owners of the firms
-and the owner of the bank), firms, a bank, a central bank, the government and
-the rest of the world. Every quarter the agents form expectations with AR(1)
+(employed and unemployed workers, inactive persons, and the owners of the
+firms and of the banks), firms, banks (one in the paper; BeforeIT.jl allows
+several), a central bank, the government and the rest of the world. Every quarter the agents form expectations with AR(1)
 models that are estimated anew on the past data, firms set prices and plan
 production, and the credit, labour and goods markets match buyers and sellers
 by search and matching. After each quarter the model records national
@@ -40,9 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`), all agent rules (`src/agent_actions/`), the credit, labour and goods markets (`src/markets/`), `step!` with shocks, `run!`, data collection (`src/utils/data.jl`), and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl`, `opt.jl` and `positive.jl` that these use |
-| One bank | As in the paper. BeforeIT.jl's option of several banks (`n_banks`) and its per-bank data series are not ported. |
-| Not ported | The model extensions CANVAS (`init_CANVAS.jl`) and growth-rate model (`init_growth_rate_model.jl`); the options `omega_pi` and `overdrafts_in_capital_ratio` (the port behaves as BeforeIT.jl with their defaults, 0 and `false`) and `theta_calvo`, which only CANVAS uses; calibration, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; `ensemblerun!` and multithreading; the built-in data sets such as `AUSTRIA2010Q1`; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`) except adding and deleting agents; model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank (`src/utils/data.jl`); `get_accounting_identities.jl`; and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl`, `opt.jl` and `positive.jl` that these use |
+| Not yet ported | Adding and deleting agents (`src/utils/modify.jl`) and `DataVector`; the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); calibration, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the built-in data sets such as `AUSTRIA2010Q1`; the package extensions in `ext/` |
 
 ## Installation
 
@@ -85,6 +84,7 @@ cargo run --release --example austria
 | Rust | BeforeIT.jl |
 |---|---|
 | `Model::new(&p, &ic, &mut rng)` | `Model(parameters, initial_conditions)` |
+| `p.n_banks = 3` before `Model::new` | `parameters["n_banks"] = 3` |
 | `model.step(&mut rng)` | `step!(model)` |
 | `model.step_with_shock(&mut rng, shock)` | `step!(model; shock!)` |
 | `model.collect_data()` | `collect_data!(model)` |
@@ -151,7 +151,12 @@ from the `libm` crate, not from the system's math library.
    (`test/matlab_code/detabm.m`, lines 116 and 126) take the minimum firm by
    firm, as BeforeIT.jl does itself for intermediate inputs (`min.` in line
    21, A.18). The port takes the minimum firm by firm in all three places.
-2. **Random numbers.** The distributions are those of the Julia code, the
+2. **Reserves in `get_accounting_identity_banks`.** BeforeIT
+   `src/utils/get_accounting_identities.jl` adds the vector of the banks'
+   reserves `model.banks.D_k` to a number, which throws in Julia. The port
+   adds their sum, as BeforeIT's own test `test/accounting_identities.jl`
+   does.
+3. **Random numbers.** The distributions are those of the Julia code, the
    numbers are not: Julia's default generator is Xoshiro256++ and draws
    normal numbers with the ziggurat method, the port uses xoshiro256\*\*,
    Box–Muller and Lemire's method for integers. Sellers are drawn from
@@ -163,7 +168,7 @@ from the `libm` crate, not from the system's math library.
    draws of a weighted sampler to the sellers, so the distribution of the
    outcomes is the same. Runs with randomness therefore agree with
    BeforeIT.jl in distribution, not number by number.
-3. **Floating point.** The port computes in `f64`, BeforeIT.jl's default
+4. **Floating point.** The port computes in `f64`, BeforeIT.jl's default
    `typeFloat`. Sums over lists use the order of Julia's `sum`: lists longer
    than 1024 numbers are split in halves until blocks of at most 1024
    numbers remain, and each block is added from left to right. Julia may
@@ -172,10 +177,10 @@ from the `libm` crate, not from the system's math library.
    can therefore differ from BeforeIT.jl in the last digits. The port has
    not been run side by side with Julia; it is checked against the reference
    values that the tests of BeforeIT.jl use (see [Verification](#verification)).
-4. **Errors.** `Model::new` checks its inputs and returns an error message
+5. **Errors.** `Model::new` checks its inputs and returns an error message
    where the Julia code would throw or `randpl` would not terminate, for
    example for lists of the wrong length, a matrix `C` that is not positive
-   definite, or more jobs than workers. `Model::step` panics where the Julia
+   definite, more jobs than workers, or a bank without firms. `Model::step` panics where the Julia
    code throws during a step; its documentation lists the cases.
 
 ## Where BeforeIT.jl differs from the paper
@@ -203,11 +208,17 @@ complete.
   series of nominal capital formation over five quarters.
 - [`tests/accounting_identities.rs`](tests/accounting_identities.rs), as
   `test/accounting_identities.jl`: in runs of three quarters with three
-  seeds, income equals production and nominal and real GDP equal the sum of
-  their uses, summed over the initial state and the three quarters within
-  the authors' tolerance of 1e-8, and the balance sheets of the central bank
-  and the bank add up within 1e-8. Each of the three identities also holds
-  in every single quarter within 1e-13 of nominal GDP.
+  seeds, with one bank and with three banks, income equals production and
+  nominal and real GDP equal the sum of their uses, summed over the initial
+  state and the three quarters within the authors' tolerance of 1e-8 (with
+  three banks the GDP identities skip the initial state, as there); the
+  balance sheets of the central bank and of each bank add up within 1e-8;
+  and the loans per bank in the data equal the loans of each bank's firms.
+  Splitting the banking sector into one, two or five banks leaves total
+  equity, initial profits and reserves unchanged within 1e-10 (relative).
+  With one bank, each of the three identities also holds in every single
+  quarter within 1e-13 of nominal GDP, and `get_accounting_identities` and
+  `get_accounting_identity_banks` return the same zeros.
 - [`tests/stochastic.rs`](tests/stochastic.rs): after one goods market, ten
   quantities against the means and standard deviations of the original
   implementation given in `test/markets/search_and_matching.jl`: one run
@@ -218,7 +229,8 @@ complete.
 - [`tests/agent_actions.rs`](tests/agent_actions.rs) and
   [`tests/estimate.rs`](tests/estimate.rs): single rules and the AR(1)
   estimate with the numbers of `test/agent_actions` and
-  `test/utils/nfvar3_and_estimate.jl`.
+  `test/utils/nfvar3_and_estimate.jl`, and `bank_exposure` and the option
+  `omega_pi`, for which BeforeIT.jl has no test.
 - [`tests/invalid_inputs.rs`](tests/invalid_inputs.rs): inputs that
   `Model::new` rejects, and borderline inputs that it accepts like the Julia
   code.
@@ -238,6 +250,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | Rust | BeforeIT.jl |
 |---|---|
 | `src/lib.rs`: `Model`, `step`, `run` | `src/model_init/init.jl`, `agents.jl`, `src/one_step.jl`, `src/one_simulation.jl` |
+| `src/extension.rs` | model types: `src/model_init/object_macro.jl` and methods per model type |
 | `src/params.rs` | the inputs and `src/model_init/init_properties.jl` |
 | `src/agents.rs` | `src/model_init/` |
 | `src/firms.rs` | `src/agent_actions/firms.jl`, `finance_insolvent_firms!` |
@@ -248,6 +261,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/aggregates.rs` | `src/agent_actions/estimations.jl`, `aggregates.jl`, `set_epsilon!` |
 | `src/markets.rs` | `src/markets/` |
 | `src/data.rs` | `src/utils/data.jl` |
+| `src/accounting.rs` | `src/utils/get_accounting_identities.jl` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
 | `src/julia.rs` | Julia's `min`, `max`, `round` and `sum`; `src/utils/positive.jl` |

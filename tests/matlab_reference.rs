@@ -28,7 +28,7 @@ struct Pair {
 /// households after the model is built.
 fn initial_state() -> Vec<Pair> {
     let m = model();
-    let (f, w_act, w_inact, b) = (&m.firms, &m.w_act, &m.w_inact, &m.bank);
+    let (f, w_act, w_inact, b) = (&m.firms, &m.w_act, &m.w_inact, &m.banks);
     let pair = |name, ours, matlab| Pair {
         name,
         ours,
@@ -75,8 +75,13 @@ fn initial_state() -> Vec<Pair> {
     }
 
     let bank = load("matlab_init_vars_bank");
-    for (name, ours) in [("E_k", b.E_k), ("r", b.r), ("Pi_k", b.Pi_k), ("D_k", b.D_k)] {
-        pairs.push(pair(name, vec![ours], list(&bank, name)));
+    for (name, ours) in [
+        ("E_k", &b.E_k),
+        ("r", &b.r),
+        ("Pi_k", &b.Pi_k),
+        ("D_k", &b.D_k),
+    ] {
+        pairs.push(pair(name, ours.clone(), list(&bank, name)));
     }
 
     let households = load("matlab_init_vars_households");
@@ -87,17 +92,17 @@ fn initial_state() -> Vec<Pair> {
         .collect();
     pairs.push(pair("O_h", O_h, list(&households, "O_h")));
     pairs.push(pair("w_h", w_act.w_h.clone(), list(&households, "w_h")));
-    let all = |field: fn(&Workers) -> &Vec<f64>, firms: &[f64], bank: f64| {
+    let all = |field: fn(&Workers) -> &Vec<f64>, firms: &[f64], bank: &[f64]| {
         let mut v = field(w_act).clone();
         v.extend(field(w_inact));
         v.extend(firms);
-        v.push(bank);
+        v.extend(bank);
         v
     };
     for (name, ours) in [
-        ("Y_h", all(|w| &w.Y_h, &f.Y_h, b.Y_h)),
-        ("D_h", all(|w| &w.D_h, &f.D_h, b.D_h)),
-        ("K_h", all(|w| &w.K_h, &f.K_h, b.K_h)),
+        ("Y_h", all(|w| &w.Y_h, &f.Y_h, &b.Y_h)),
+        ("D_h", all(|w| &w.D_h, &f.D_h, &b.D_h)),
+        ("K_h", all(|w| &w.K_h, &f.K_h, &b.K_h)),
     ] {
         pairs.push(pair(name, ours, list(&households, name)));
     }
@@ -264,7 +269,7 @@ fn one_quarter_rule_by_rule() {
     m.set_central_bank_rate();
     check("r_bar", m.cb.r_bar, 0.0017616, 1e-4, 0.0);
     m.set_banks_rate();
-    check("r", m.bank.r, 0.028476, 1e-4, 0.0);
+    check("r", mean(&m.banks.r), 0.028476, 1e-4, 0.0);
 
     m.set_firms_expectations_and_decisions(rng);
     let f = &m.firms;
@@ -296,14 +301,14 @@ fn one_quarter_rule_by_rule() {
     check("sb_inact", m.gov.sb_inact, 2.2434, 1e-4, 0.0);
 
     m.set_banks_expected_profits();
-    check("Pi_e_k", m.bank.Pi_e_k, 6510.4793, 1e-5, 0.0);
+    check("Pi_e_k", mean(&m.banks.Pi_e_k), 6510.4793, 1e-5, 0.0);
 
     m.set_households_budget_act();
     m.set_households_budget_inact();
     m.set_households_budget_firms();
     m.set_households_budget_banks();
     // Sum over all households: workers, inactive persons, firm owners, bank
-    // owner.
+    // owners.
     let total = |m: &Model, f: fn(&Workers) -> f64, firms: f64, bank: f64| {
         f(&m.w_act) + f(&m.w_inact) + firms + bank
     };
@@ -311,13 +316,13 @@ fn one_quarter_rule_by_rule() {
         &m,
         |w| w.C_d_h.iter().sum(),
         m.firms.C_d_h.iter().sum(),
-        m.bank.C_d_h,
+        m.banks.C_d_h.iter().sum(),
     );
     let I_d_h = total(
         &m,
         |w| w.I_d_h.iter().sum(),
         m.firms.I_d_h.iter().sum(),
-        m.bank.I_d_h,
+        m.banks.I_d_h.iter().sum(),
     );
     check("C_d_h", C_d_h, 35538.3159, 1e-9, 1e-6);
     check("I_d_h", I_d_h, 2950.5957, 1e-6, 1e-6);
@@ -338,19 +343,19 @@ fn one_quarter_rule_by_rule() {
         &m,
         |w| w.C_h.iter().sum(),
         m.firms.C_h.iter().sum(),
-        m.bank.C_h,
+        m.banks.C_h.iter().sum(),
     );
     let I_h = total(
         &m,
         |w| w.I_h.iter().sum(),
         m.firms.I_h.iter().sum(),
-        m.bank.I_h,
+        m.banks.I_h.iter().sum(),
     );
     let K_h = total(
         &m,
         |w| w.K_h.iter().sum(),
         m.firms.K_h.iter().sum(),
-        m.bank.K_h,
+        m.banks.K_h.iter().sum(),
     );
     check("C_h", C_h, 35136.4805, 1e-4, 1e-4);
     check("I_h", I_h, 2699.6511, 1e-6, 1e-6);
@@ -377,9 +382,9 @@ fn one_quarter_rule_by_rule() {
     m.set_firms_profits();
     check("Pi_i", mean(&m.firms.Pi_i), 17.5491, 1e-2, 0.0);
     m.set_banks_profits();
-    check("Pi_k", m.bank.Pi_k, 6486.6381, 1e-5, 0.0);
+    check("Pi_k", mean(&m.banks.Pi_k), 6486.6381, 1e-5, 0.0);
     m.set_banks_equity();
-    check("E_k", m.bank.E_k, 90742.39, 1e-5, 0.0);
+    check("E_k", mean(&m.banks.E_k), 90742.39, 1e-5, 0.0);
 
     m.set_households_income_act(false);
     m.set_households_income_inact(false);
@@ -393,13 +398,13 @@ fn one_quarter_rule_by_rule() {
         &m,
         |w| w.Y_h.iter().sum(),
         m.firms.Y_h.iter().sum(),
-        m.bank.Y_h,
+        m.banks.Y_h.iter().sum(),
     );
     let D_h = total(
         &m,
         |w| w.D_h.iter().sum(),
         m.firms.D_h.iter().sum(),
-        m.bank.D_h,
+        m.banks.D_h.iter().sum(),
     );
     check("Y_h", Y_h, 45032.3263, 1e-2, 0.0);
     check("D_h", D_h, 221816.6764, 1e-3, 0.0);
@@ -429,5 +434,5 @@ fn one_quarter_rule_by_rule() {
     m.set_rotw_deposits();
     check("D_RoW", m.rotw.D_RoW, -644.0817, 1e-5, 0.0);
     m.set_banks_deposits();
-    check("D_k", m.bank.D_k, 128349.3912, 1e-3, 0.0);
+    check("D_k", mean(&m.banks.D_k), 128349.3912, 1e-3, 0.0);
 }

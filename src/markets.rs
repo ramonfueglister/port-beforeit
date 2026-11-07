@@ -140,7 +140,7 @@ fn price_weighted_shares(P_bar_g: &[f64], share: &[f64]) -> Vec<f64> {
 
 /// Budgets for the retail market, `initialize_variables_retail_market`: all
 /// households in the order workers, inactive persons, firm owners, bank
-/// owner, and the shares of the products in the budgets for consumption,
+/// owners, and the shares of the products in the budgets for consumption,
 /// housing investment, government and exports.
 struct RetailDemand {
     C_d_h: Vec<f64>,
@@ -153,22 +153,22 @@ struct RetailDemand {
 
 impl RetailDemand {
     fn new<X>(m: &AbstractModel<X>) -> RetailDemand {
-        let (w_act, w_inact, f, b) = (&m.w_act, &m.w_inact, &m.firms, &m.bank);
+        let (w_act, w_inact, f, b) = (&m.w_act, &m.w_inact, &m.firms, &m.banks);
         let C_d_h = w_act
             .C_d_h
             .iter()
             .chain(&w_inact.C_d_h)
             .chain(&f.C_d_h)
+            .chain(&b.C_d_h)
             .copied()
-            .chain(std::iter::once(b.C_d_h))
             .collect();
         let I_d_h = w_act
             .I_d_h
             .iter()
             .chain(&w_inact.I_d_h)
             .chain(&f.I_d_h)
+            .chain(&b.I_d_h)
             .copied()
-            .chain(std::iter::once(b.I_d_h))
             .collect();
         let (P_bar_g, p) = (&m.agg.P_bar_g, &m.prop);
         RetailDemand {
@@ -182,35 +182,49 @@ impl RetailDemand {
     }
 }
 
-/// `search_and_matching_credit!` (A.62 to A.64): firms that want new loans
-/// are served in random order, limited by the loan-to-value ratio and by the
-/// bank's equity relative to all expected loans.
+/// `search_and_matching_credit!` (A.62 to A.64): bank by bank, the firms of
+/// the bank that want new loans are served in random order, limited by the
+/// loan-to-value ratio and by the bank's equity relative to its exposure
+/// ([`crate::base::bank_exposure`] with expected loans). As in the Julia
+/// code, the new loans are stored at the position given by the firm's ID.
 pub fn search_and_matching_credit<X: Extension, R: Randomness + ?Sized>(
     m: &mut AbstractModel<X>,
     rng: &mut R,
 ) {
-    {
-        let (zeta, zeta_LTV) = (m.prop.zeta, m.prop.zeta_LTV);
-        let E_k = m.bank.E_k;
-        let f = &mut m.firms;
-        let mut ids: Vec<usize> = (0..f.len()).filter(|&i| f.DL_d_i[i] > 0.0).collect();
-        // From left to right, as Julia's `sum` with `init`.
-        let exposure: f64 = f.L_e_i.iter().sum();
-        let mut DL_i = vec![0.0; f.len()];
-        rng.shuffle(&mut ids);
+    let (zeta, zeta_LTV) = (m.prop.zeta, m.prop.zeta_LTV);
+    let mut DL_i = vec![0.0; m.firms.DL_i.len()];
+    for bank_id in 0..m.prop.n_banks {
+        let f = &m.firms;
+        let bank_firms: Vec<usize> = m.banks.firms[bank_id]
+            .iter()
+            .map(|&id| f.index(id))
+            .filter(|&i| f.DL_d_i[i] > 0.0)
+            .collect();
+        let DL_d_i: Vec<f64> = bank_firms.iter().map(|&i| f.DL_d_i[i]).collect();
+        let K_e_i: Vec<f64> = bank_firms.iter().map(|&i| f.K_e_i[i]).collect();
+        let L_e_i: Vec<f64> = bank_firms.iter().map(|&i| f.L_e_i[i]).collect();
+        let f_id: Vec<usize> = bank_firms.iter().map(|&i| f.ID[i]).collect();
+        let E_k = m.banks.E_k[bank_id];
+
+        // The capital constraint binds on the bank's whole loan book, not
+        // only on the firms that ask for new loans.
+        let exposure = X::bank_exposure(m, bank_id, true, m.prop.overdrafts_in_capital_ratio);
+
         let mut s_DL = 0.0;
-        for i in ids {
-            DL_i[i] = max(
+        let mut I_FG: Vec<usize> = (0..DL_d_i.len()).collect();
+        rng.shuffle(&mut I_FG);
+        for i in I_FG {
+            DL_i[f_id[i]] = max(
                 0.0,
                 min(
-                    min(f.DL_d_i[i], zeta_LTV * f.K_e_i[i] - f.L_e_i[i]),
+                    min(DL_d_i[i], zeta_LTV * K_e_i[i] - L_e_i[i]),
                     E_k / zeta - exposure - s_DL,
                 ),
             );
-            s_DL += DL_i[i];
+            s_DL += DL_i[f_id[i]];
         }
-        f.DL_i = DL_i;
     }
+    m.firms.DL_i = DL_i;
 }
 
 /// `search_and_matching_labour!` (A.23, A.24): firms with too many employees
@@ -572,7 +586,7 @@ impl<X: Extension> AbstractModel<X> {
         self.firms
             .C_h
             .copy_from_slice(&C_h[groups[2].0..groups[2].1]);
-        self.bank.C_h = C_h[H_W + H_inact + I];
+        self.banks.C_h.copy_from_slice(&C_h[groups[2].1..]);
         self.w_act
             .I_h
             .copy_from_slice(&I_h[groups[0].0..groups[0].1]);
@@ -582,7 +596,7 @@ impl<X: Extension> AbstractModel<X> {
         self.firms
             .I_h
             .copy_from_slice(&I_h[groups[2].0..groups[2].1]);
-        self.bank.I_h = I_h[H_W + H_inact + I];
+        self.banks.I_h.copy_from_slice(&I_h[groups[2].1..]);
 
         let f = &mut self.firms;
         for i in 0..I {
@@ -603,11 +617,11 @@ impl<X: Extension> AbstractModel<X> {
             (&mut self.w_act.K_h, &self.w_act.I_h),
             (&mut self.w_inact.K_h, &self.w_inact.I_h),
             (&mut self.firms.K_h, &self.firms.I_h),
+            (&mut self.banks.K_h, &self.banks.I_h),
         ] {
             for (k, i) in K.iter_mut().zip(I) {
                 *k += i;
             }
         }
-        self.bank.K_h += self.bank.I_h;
     }
 }

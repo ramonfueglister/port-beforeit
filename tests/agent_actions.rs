@@ -13,32 +13,41 @@ fn model() -> Model {
 }
 
 /// `test bank_profits`: interest on loans and overdrafts plus interest on
-/// the reserves at the central bank, minus interest on deposits.
+/// the reserves at the central bank, minus interest on deposits. As in the
+/// Julia test, the model is cut down to three firms of the first bank.
 #[test]
 fn bank_profits() {
     let mut m = model();
     m.firms.L_i = vec![1.0, -1.0, 0.0];
     m.firms.D_i = vec![1.0, -1.0, 0.0];
     m.firms.D_h = vec![1.0, -1.0, 0.0];
+    m.firms.B_i = vec![0, 0, 0];
+    m.prop.I = 3;
     m.w_act.D_h.clear();
     m.w_inact.D_h.clear();
-    m.bank.D_h = 0.0;
-    m.bank.D_k = 4.0;
+    m.w_act.B_h.clear();
+    m.w_inact.B_h.clear();
+    m.banks.firms[0].truncate(3);
+    m.banks.w_act[0].clear();
+    m.banks.w_inact[0].clear();
+    m.prop.H = 0;
+    m.banks.D_h[0] = 0.0;
+    m.banks.D_k[0] = 4.0;
     m.cb.r_bar = 0.1;
-    m.bank.r = 0.05;
-    m.set_banks_profits();
-    check("Pi_k", m.bank.Pi_k, 0.3, 0.0, 1e-10);
+    m.banks.r[0] = 0.05;
+    let Pi_k = m.banks_profits();
+    check("Pi_k", mean(&Pi_k), 0.3, 0.0, 1e-10);
 }
 
 /// `test bank_expected_profits`.
 #[test]
 fn bank_expected_profits() {
     let mut m = model();
-    m.bank.Pi_k = 1.0;
+    m.banks.Pi_k.fill(1.0);
     m.agg.pi_e = 0.1;
     m.agg.gamma_e = 0.2;
-    m.set_banks_expected_profits();
-    check("Pi_e_k", m.bank.Pi_e_k, 1.32, 0.0, 1e-10);
+    let Pi_e_k = m.banks_expected_profits();
+    check("Pi_e_k", mean(&Pi_e_k), 1.32, 0.0, 1e-10);
 }
 
 /// `test bank_deposits`: the reserves are what remains of the bank's
@@ -48,13 +57,60 @@ fn bank_deposits() {
     let mut m = model();
     m.w_act.D_h = vec![1.0, 2.0, 3.0];
     m.w_inact.D_h = vec![1.0, 2.0, 3.0];
+    m.w_act.B_h = vec![0, 0, 0];
+    m.w_inact.B_h = vec![0, 0, 0];
     m.firms.D_h = vec![1.0, 2.0, 3.0];
     m.firms.D_i = vec![1.0, 2.0, 3.0];
     m.firms.L_i = vec![6.0, 0.0, 0.0];
-    m.bank.D_h = 6.0;
-    m.bank.E_k = 6.0;
-    m.set_banks_deposits();
-    check("D_k", m.bank.D_k, 30.0, 0.0, 1e-10);
+    m.firms.B_i = vec![0, 0, 0];
+    m.banks.firms[0].truncate(3);
+    m.banks.w_act[0].truncate(3);
+    m.banks.w_inact[0].truncate(3);
+    m.prop.I = 3;
+    m.prop.H = 3;
+    m.banks.D_h[0] = 6.0;
+    m.banks.E_k[0] = 6.0;
+    let D_k = m.banks_deposits();
+    check("D_k", mean(&D_k), 30.0, 0.0, 1e-10);
+}
+
+/// `bank_exposure` (no test in BeforeIT.jl): the loans of the bank's firms,
+/// expected loans if asked, plus the overdrafts of all its customers and its
+/// owner if asked.
+#[test]
+fn bank_exposure() {
+    let mut m = model();
+    m.firms.L_i = vec![1.0, 2.0, 3.0];
+    m.firms.L_e_i = vec![0.5, 1.0, 1.5];
+    m.firms.D_i = vec![-1.0, 2.0, 0.0];
+    m.firms.D_h = vec![0.0, -2.0, 1.0];
+    m.firms.B_i = vec![0, 0, 0];
+    m.prop.I = 3;
+    m.banks.firms[0].truncate(3);
+    m.w_act.D_h = vec![-0.5, 1.0];
+    m.w_act.B_h = vec![0, 0];
+    m.banks.w_act[0].truncate(2);
+    m.w_inact.D_h = vec![-0.25];
+    m.w_inact.B_h = vec![0];
+    m.banks.w_inact[0].truncate(1);
+    m.banks.D_h[0] = -0.125;
+    assert_eq!(m.bank_exposure(0, false, false), 6.0);
+    assert_eq!(m.bank_exposure(0, true, false), 3.0);
+    // Loans 6, overdrafts of a firm 1, of a firm owner 2, of a worker 0.5,
+    // of an inactive person 0.25 and of the bank owner 0.125.
+    assert_eq!(m.bank_exposure(0, false, true), 9.875);
+}
+
+/// `omega_pi` (no test in BeforeIT.jl): with weight 1, expected inflation
+/// is last quarter's inflation.
+#[test]
+fn omega_pi() {
+    let (mut p, ic) = austria();
+    p.omega_pi = 1.0;
+    let mut m = Model::new(&p, &ic, &mut Deterministic).unwrap();
+    let (_, _, pi_e) = m.growth_inflation_expectations(&mut Deterministic);
+    let n = m.prop.T_prime + m.agg.t - 1;
+    assert_eq!(pi_e, m.agg.pi_[n - 1]);
 }
 
 /// `test taylor_rule`: the policy rate does not fall below 0.

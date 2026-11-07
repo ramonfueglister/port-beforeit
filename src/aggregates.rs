@@ -7,9 +7,9 @@ use crate::random::Randomness;
 use crate::{AbstractModel, Extension};
 
 /// `growth_inflation_expectations` (A.6, A.7, A.10): AR(1) rules estimated on
-/// the whole history of log real GDP and of inflation. BeforeIT's smoothing
-/// option `omega_pi` is not ported; its default 0 leaves `pi_e` as computed
-/// here.
+/// the whole history of log real GDP and of inflation. Expected inflation
+/// is then smoothed with last quarter's inflation by the weight
+/// `prop.omega_pi`, which is 0 (no smoothing, as in the paper) unless set.
 pub fn growth_inflation_expectations<X: Extension, R: Randomness + ?Sized>(
     m: &mut AbstractModel<X>,
     rng: &mut R,
@@ -20,7 +20,9 @@ pub fn growth_inflation_expectations<X: Extension, R: Randomness + ?Sized>(
     let Y_e = libm::exp(lY_e);
     let gamma_e = Y_e / m.agg.Y[n - 1] - 1.0;
     let lpi = X::estimate_next_value(&m.agg.pi_[..n], rng);
-    let pi_e = libm::exp(lpi) - 1.0;
+    let mut pi_e = libm::exp(lpi) - 1.0;
+    let omega_pi = m.prop.omega_pi;
+    pi_e = (1.0 - omega_pi) * pi_e + (omega_pi * m.agg.pi_[n - 1]);
     (Y_e, gamma_e, pi_e)
 }
 

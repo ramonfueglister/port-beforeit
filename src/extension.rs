@@ -137,28 +137,38 @@ pub trait Extension: Sized {
 
     // ---- src/agent_actions/bank.jl ----
 
-    /// `banks_rate(model)`: the lending rate.
+    /// `bank_exposure(model, bank_id; expected, overdrafts)`.
+    fn bank_exposure(
+        m: &AbstractModel<Self>,
+        bank_id: usize,
+        expected: bool,
+        overdrafts: bool,
+    ) -> f64 {
+        base::bank_exposure(m, bank_id, expected, overdrafts)
+    }
+
+    /// `banks_rate(model)`: the lending rate, the same for every bank.
     fn banks_rate(m: &mut AbstractModel<Self>) -> f64 {
         base::banks_rate(m)
     }
 
-    /// `banks_expected_profits(model)`.
-    fn banks_expected_profits(m: &mut AbstractModel<Self>) -> f64 {
+    /// `banks_expected_profits(model)`, one entry per bank.
+    fn banks_expected_profits(m: &mut AbstractModel<Self>) -> Vec<f64> {
         base::banks_expected_profits(m)
     }
 
     /// `banks_profits(model)`.
-    fn banks_profits(m: &mut AbstractModel<Self>) -> f64 {
+    fn banks_profits(m: &mut AbstractModel<Self>) -> Vec<f64> {
         base::banks_profits(m)
     }
 
     /// `banks_equity(model)`.
-    fn banks_equity(m: &mut AbstractModel<Self>) -> f64 {
+    fn banks_equity(m: &mut AbstractModel<Self>) -> Vec<f64> {
         base::banks_equity(m)
     }
 
     /// `banks_deposits(model)`.
-    fn banks_deposits(m: &mut AbstractModel<Self>) -> f64 {
+    fn banks_deposits(m: &mut AbstractModel<Self>) -> Vec<f64> {
         base::banks_deposits(m)
     }
 
@@ -272,8 +282,8 @@ pub trait Extension: Sized {
         base::households_income_firms(m, expected)
     }
 
-    /// `households_income_banks(model; expected)`.
-    fn households_income_banks(m: &mut AbstractModel<Self>, expected: bool) -> f64 {
+    /// `households_income_banks(model; expected)`, one entry per bank.
+    fn households_income_banks(m: &mut AbstractModel<Self>, expected: bool) -> Vec<f64> {
         base::households_income_banks(m, expected)
     }
 
@@ -293,7 +303,7 @@ pub trait Extension: Sized {
     }
 
     /// `households_budget_banks(model)`.
-    fn households_budget_banks(m: &mut AbstractModel<Self>) -> (f64, f64) {
+    fn households_budget_banks(m: &mut AbstractModel<Self>) -> (Vec<f64>, Vec<f64>) {
         base::households_budget_banks(m)
     }
 

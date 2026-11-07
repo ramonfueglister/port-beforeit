@@ -36,15 +36,16 @@ pub fn gov_expenditure<X: Extension, R: Randomness + ?Sized>(
 pub fn gov_revenues<X: Extension>(m: &mut AbstractModel<X>) -> f64 {
     let p = &m.prop;
     let P_bar_HH = m.agg.P_bar_HH;
-    let (w, f, b) = (&m.w_act, &m.firms, &m.bank);
+    let (w, f, b) = (&m.w_act, &m.firms, &m.banks);
     let wages_emp: Vec<f64> = (0..w.w_h.len())
         .filter(|&h| w.O_h[h].is_some())
         .map(|h| w.w_h[h])
         .collect();
     let tot_wages_emp = sum(&wages_emp);
-    let tot_C_h = sum(&w.C_h) + sum(&m.w_inact.C_h) + sum(&f.C_h) + b.C_h;
-    let tot_I_h = sum(&w.I_h) + sum(&m.w_inact.I_h) + sum(&f.I_h) + b.I_h;
-    let profits = sum_by(f.Pi_i.len(), |i| pos(f.Pi_i[i])) + pos(b.Pi_k);
+    let tot_C_h = sum(&w.C_h) + sum(&m.w_inact.C_h) + sum(&f.C_h) + sum(&b.C_h);
+    let tot_I_h = sum(&w.I_h) + sum(&m.w_inact.I_h) + sum(&f.I_h) + sum(&b.I_h);
+    let profits =
+        sum_by(f.Pi_i.len(), |i| pos(f.Pi_i[i])) + sum_by(b.Pi_k.len(), |k| pos(b.Pi_k[k]));
 
     let social_security = (p.tau_SIF + p.tau_SIW) * tot_wages_emp * P_bar_HH;
     let labour_income = p.tau_INC * (1.0 - p.tau_SIW) * P_bar_HH * tot_wages_emp;

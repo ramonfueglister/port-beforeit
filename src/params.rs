@@ -123,6 +123,22 @@ pub struct Parameters {
     pub xi_pi: f64,
     /// Weight of economic growth.
     pub xi_gamma: f64,
+    /// Number of banks. BeforeIT.jl uses 1 when the key `n_banks` is
+    /// missing, as in the paper.
+    pub n_banks: usize,
+    /// Weight of last quarter's inflation in expected inflation, between 0
+    /// (only the estimate) and 1 (only last quarter). BeforeIT.jl uses 0 when
+    /// the key `omega_pi` is missing.
+    pub omega_pi: f64,
+    /// Share of the firms, drawn at random, that adjust their price each
+    /// quarter; only the model type CANVAS uses it. BeforeIT.jl uses 1 (all
+    /// firms) when the key `theta_calvo` is missing.
+    pub theta_calvo: f64,
+    /// Whether a bank's capital constraint on new loans also counts the
+    /// overdrafts (negative deposits) of its customers. BeforeIT.jl uses
+    /// `false` (loans only) when the key `overdrafts_in_capital_ratio` is
+    /// missing.
+    pub overdrafts_in_capital_ratio: bool,
 }
 
 /// Initial conditions (BeforeIT `initial_conditions`). Time series start with
@@ -173,9 +189,7 @@ pub struct InitialConditions {
     pub w_UB: f64,
 }
 
-/// Values that stay fixed during a run, BeforeIT `Properties`. The options
-/// of BeforeIT's model extensions (`n_banks`, `omega_pi`, `theta_calvo`,
-/// `overdrafts_in_capital_ratio`) are not ported.
+/// Values that stay fixed during a run, BeforeIT `Properties`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Properties {
     pub G: usize,
@@ -206,6 +220,9 @@ pub struct Properties {
     pub zeta: f64,
     pub zeta_LTV: f64,
     pub zeta_b: f64,
+    pub omega_pi: f64,
+    pub theta_calvo: f64,
+    pub overdrafts_in_capital_ratio: bool,
     pub b_CF_g: Vec<f64>,
     pub b_CFH_g: Vec<f64>,
     pub b_HH_g: Vec<f64>,
@@ -219,15 +236,17 @@ pub struct Properties {
     pub sb_other: f64,
     pub E_k: f64,
     pub r_bar: f64,
+    pub n_banks: usize,
 }
 
 impl Properties {
     /// `Properties(parameters, initial_conditions)`, after checking the
     /// inputs, which the Julia code uses without checking: the lists per
     /// sector have `G` entries, the histories are long enough for the
-    /// estimates, every firm and the bank have an owner among the active
-    /// persons, and the shocks can be drawn from `C`. For the last three the
-    /// Julia code throws an exception, at the latest in the first quarter.
+    /// estimates, there is at least one bank, every firm and every bank have
+    /// an owner among the active persons, and the shocks can be drawn from
+    /// `C`. For the last four the Julia code throws an exception, at the
+    /// latest in the first quarter.
     pub fn new(p: &Parameters, ic: &InitialConditions) -> Result<Self, String> {
         check(p, ic)?;
         Ok(Properties {
@@ -257,6 +276,9 @@ impl Properties {
             zeta: p.zeta,
             zeta_LTV: p.zeta_LTV,
             zeta_b: p.zeta_b,
+            omega_pi: p.omega_pi,
+            theta_calvo: p.theta_calvo,
+            overdrafts_in_capital_ratio: p.overdrafts_in_capital_ratio,
             b_CF_g: p.b_CF_g.clone(),
             b_CFH_g: p.b_CFH_g.clone(),
             b_HH_g: p.b_HH_g.clone(),
@@ -270,6 +292,7 @@ impl Properties {
             sb_other: ic.sb_other,
             E_k: ic.E_k,
             r_bar: ic.r_bar,
+            n_banks: p.n_banks,
         })
     }
 }
@@ -330,11 +353,16 @@ fn check(p: &Parameters, ic: &InitialConditions) -> Result<(), String> {
             ));
         }
     }
+    // Julia's `rand(1:n_banks, ·)` in the model constructor throws.
+    if p.n_banks == 0 {
+        return Err("n_banks is 0".into());
+    }
     let I: usize = p.I_s.iter().sum();
-    if p.H_act < I + 1 {
+    if p.H_act < I + p.n_banks {
         return Err(format!(
-            "H_act = {} is less than the {I} firm owners plus the bank owner",
-            p.H_act
+            "H_act = {} is less than the number of firm and bank owners, I + n_banks = {}",
+            p.H_act,
+            I + p.n_banks
         ));
     }
     // Julia's `epsilon(C)` throws in the first quarter for such a matrix.

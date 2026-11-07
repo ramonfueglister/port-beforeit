@@ -34,6 +34,7 @@ pub mod julia;
 pub mod params;
 pub mod random;
 
+mod accounting;
 mod aggregates;
 mod bank;
 mod firms;
@@ -42,8 +43,9 @@ mod households;
 mod markets;
 mod rotw;
 
+pub use accounting::{get_accounting_identities, get_accounting_identity_banks};
 pub use agents::{
-    Aggregates, Bank, CentralBank, Firms, Government, Households, RestOfTheWorld, Workers,
+    Aggregates, Banks, CentralBank, Firms, Government, Households, RestOfTheWorld, Workers,
 };
 pub use bank::taylor_rule;
 pub use data::Data;
@@ -64,8 +66,9 @@ pub mod base {
         sector_specific_priceindex, set_time,
     };
     pub use crate::bank::{
-        banks_deposits, banks_equity, banks_expected_profits, banks_profits, banks_rate,
-        central_bank_equity, central_bank_profits, central_bank_rate, finance_insolvent_firms,
+        bank_exposure, banks_deposits, banks_equity, banks_expected_profits, banks_profits,
+        banks_rate, central_bank_equity, central_bank_profits, central_bank_rate,
+        finance_insolvent_firms,
     };
     pub use crate::data::{allocate_new_data, collect_data, update_data_init, update_data_step};
     pub use crate::firms::{
@@ -98,8 +101,8 @@ pub struct AbstractModel<X = Standard> {
     pub w_inact: Workers,
     /// Firms, each together with its owner (investor) household.
     pub firms: Firms,
-    /// The bank and its owner household.
-    pub bank: Bank,
+    /// The banks, each together with its owner household.
+    pub banks: Banks,
     pub cb: CentralBank,
     pub gov: Government,
     pub rotw: RestOfTheWorld,
@@ -122,7 +125,7 @@ pub type Agents = (
     Workers,
     Workers,
     Firms,
-    Bank,
+    Banks,
     CentralBank,
     Government,
     RestOfTheWorld,
@@ -151,7 +154,7 @@ impl Model {
             w_act,
             w_inact,
             firms,
-            Bank::new(p, ic),
+            Banks::new(p, ic),
             CentralBank::new(p, ic),
             Government::new(p, ic),
             RestOfTheWorld::new(p, ic),
@@ -166,22 +169,35 @@ impl Model {
 impl<X: Extension> AbstractModel<X> {
     /// The model constructor of BeforeIT `src/model_init/agents.jl`,
     /// `T((w_act, w_inact, firms, banks, cb, gov, rotw, agg, prop, data))`
-    /// for a model type `T`: fills the jobs of the firms, sets up the bank
-    /// and the deposits of the households, and collects the first data.
+    /// for a model type `T`: assigns the firms and persons to the banks,
+    /// fills the jobs of the firms, sets up the banks and the deposits of the
+    /// households, and collects the first data.
     ///
-    /// Returns an error if the firms need more employees than there are
-    /// workers (the Julia code throws).
+    /// Returns an error if `banks` does not hold `prop.n_banks` banks (a
+    /// check the Julia code does not make), if there is no bank, if the
+    /// firms need more employees than there are workers, or if a bank gets
+    /// no firms (in the last three cases the Julia code throws).
     pub fn from_agents<R: Randomness + ?Sized>(
         agents: Agents,
         ext: X,
-        _rng: &mut R,
+        rng: &mut R,
     ) -> Result<Self, String> {
-        let (w_act, w_inact, firms, bank, cb, gov, rotw, agg, prop, data) = agents;
+        let (w_act, w_inact, firms, banks, cb, gov, rotw, agg, prop, data) = agents;
+        if banks.len() != prop.n_banks {
+            return Err(format!(
+                "there are {} banks, but prop.n_banks is {}",
+                banks.len(),
+                prop.n_banks
+            ));
+        }
+        if banks.is_empty() {
+            return Err("there is no bank".into());
+        }
         let mut model = AbstractModel {
             w_act,
             w_inact,
             firms,
-            bank,
+            banks,
             cb,
             gov,
             rotw,
@@ -190,11 +206,32 @@ impl<X: Extension> AbstractModel<X> {
             data,
             ext,
         };
+        model.assign_banks(rng);
         model.assign_workers()?;
-        model.init_bank();
+        model.init_banks()?;
         model.update_variables_with_totals();
         model.collect_data();
         Ok(model)
+    }
+
+    /// The bank of each firm, worker and inactive person, which they keep:
+    /// bank 0 if there is only one, otherwise drawn at random. Part of the
+    /// model constructor in BeforeIT `src/model_init/agents.jl`.
+    fn assign_banks<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
+        let n_banks = self.banks.len();
+        for B in [
+            &mut self.firms.B_i,
+            &mut self.w_act.B_h,
+            &mut self.w_inact.B_h,
+        ] {
+            for b in B.iter_mut() {
+                *b = if n_banks == 1 {
+                    0
+                } else {
+                    rng.rand_below(n_banks)
+                };
+            }
+        }
     }
 
     /// Fills the jobs of each firm, in firm order, with the next workers and
@@ -237,35 +274,58 @@ impl<X: Extension> AbstractModel<X> {
         Ok(())
     }
 
-    /// Initial profit and reserves of the bank and income, deposits and
-    /// capital of its owner. Part of the model constructor in BeforeIT
-    /// `src/model_init/agents.jl`, with one bank.
-    fn init_bank(&mut self) {
+    /// The customers of each bank, its initial profit and reserves, and the
+    /// income, deposits and capital of its owner. Part of the model
+    /// constructor in BeforeIT `src/model_init/agents.jl`.
+    fn init_banks(&mut self) -> Result<(), String> {
         let prop = &self.prop;
+        let (f, b) = (&self.firms, &mut self.banks);
         let P_bar_HH = 1.0;
-        // From left to right, as Julia's `sum` over a generator.
-        let L_base: f64 = self.firms.L_i.iter().sum();
-        let D_base: f64 = self.firms.D_i.iter().sum();
-        let E_k_base = self.bank.E_k;
-        self.bank.Pi_k = prop.mu * L_base + prop.r_bar * E_k_base;
-        self.bank.D_k = D_base + E_k_base - L_base;
-        self.bank.Y_h = prop.theta_DIV
-            * (1.0 - prop.tau_INC)
-            * (1.0 - prop.tau_FIRM)
-            * julia::max(0.0, self.bank.Pi_k)
-            + prop.sb_other * P_bar_HH;
-        self.bank.D_h = prop.D_H * self.bank.Y_h;
-        self.bank.K_h = prop.K_H * self.bank.Y_h;
+        for k in 0..prop.n_banks {
+            b.firms[k] = (0..prop.I).filter(|&i| f.B_i[i] == k).collect();
+            b.w_act[k] = (0..self.w_act.D_h.len())
+                .filter(|&h| self.w_act.B_h[h] == k)
+                .collect();
+            b.w_inact[k] = (0..self.w_inact.D_h.len())
+                .filter(|&h| self.w_inact.B_h[h] == k)
+                .collect();
+
+            // Julia's `sum` over a generator: from left to right, and an
+            // exception for a bank without firms.
+            let no_firms = || format!("bank {k} has no firms");
+            let L_base = b.firms[k]
+                .iter()
+                .map(|&id| f.L_i[f.index(id)])
+                .reduce(|x, y| x + y)
+                .ok_or_else(no_firms)?;
+            let D_base = b.firms[k]
+                .iter()
+                .map(|&id| f.D_i[f.index(id)])
+                .reduce(|x, y| x + y)
+                .ok_or_else(no_firms)?;
+            // Each bank's equity is its share of the sector's equity prop.E_k.
+            let E_k_base = b.E_k[k];
+            b.Pi_k[k] = prop.mu * L_base + prop.r_bar * E_k_base;
+            b.D_k[k] = D_base + E_k_base - L_base;
+            b.Y_h[k] = prop.theta_DIV
+                * (1.0 - prop.tau_INC)
+                * (1.0 - prop.tau_FIRM)
+                * julia::max(0.0, b.Pi_k[k])
+                + prop.sb_other * P_bar_HH;
+            b.D_h[k] = prop.D_H * b.Y_h[k];
+            b.K_h[k] = prop.K_H * b.Y_h[k];
+        }
+        Ok(())
     }
 
     /// `update_variables_with_totals!`: household deposits and capital as
-    /// shares of total household income; the deposits are added to the
-    /// bank's reserves.
+    /// shares of total household income; each bank adds the deposits of its
+    /// customers and its owner to its reserves.
     pub fn update_variables_with_totals(&mut self) {
         let tot_Y_h = julia::sum(&self.firms.Y_h)
             + julia::sum(&self.w_act.Y_h)
             + julia::sum(&self.w_inact.Y_h)
-            + self.bank.Y_h;
+            + julia::sum(&self.banks.Y_h);
         for v in [
             &mut self.firms.K_h,
             &mut self.firms.D_h,
@@ -273,18 +333,23 @@ impl<X: Extension> AbstractModel<X> {
             &mut self.w_act.D_h,
             &mut self.w_inact.K_h,
             &mut self.w_inact.D_h,
+            &mut self.banks.K_h,
+            &mut self.banks.D_h,
         ] {
             for x in v.iter_mut() {
                 *x /= tot_Y_h;
             }
         }
-        self.bank.K_h /= tot_Y_h;
-        self.bank.D_h /= tot_Y_h;
-        let tot_D_h = julia::sum(&self.firms.D_h)
-            + julia::sum(&self.w_act.D_h)
-            + julia::sum(&self.w_inact.D_h)
-            + self.bank.D_h;
-        self.bank.D_k += tot_D_h;
+        let (f, w_act, w_inact) = (&self.firms, &self.w_act, &self.w_inact);
+        let b = &mut self.banks;
+        for k in 0..self.prop.n_banks {
+            let D_h = agents::gather(&b.firms[k], &f.D_h, |id| f.index(id));
+            let D_h_act = agents::gather(&b.w_act[k], &w_act.D_h, |id| w_act.index(id));
+            let D_h_inact = agents::gather(&b.w_inact[k], &w_inact.D_h, |id| w_inact.index(id));
+            let tot_D_h =
+                julia::sum(&D_h) + julia::sum(&D_h_act) + julia::sum(&D_h_inact) + b.D_h[k];
+            b.D_k[k] += tot_D_h;
+        }
     }
 
     /// One quarter, `step!(model)`.

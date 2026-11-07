@@ -52,6 +52,15 @@ fn count(v: &Value, key: &str) -> usize {
     x as usize
 }
 
+/// Julia `get(parameters, key, default)` for the optional parameters.
+fn num_or(v: &Value, key: &str, default: f64) -> f64 {
+    if v.get(key).is_some() {
+        num(v, key)
+    } else {
+        default
+    }
+}
+
 /// Parameters and initial conditions for Austria, 2010Q1.
 pub fn austria() -> (Parameters, InitialConditions) {
     let v = load("austria_2010q1_parameters");
@@ -123,6 +132,12 @@ pub fn austria() -> (Parameters, InitialConditions) {
         pi_star: num(&v, "pi_star"),
         xi_pi: num(&v, "xi_pi"),
         xi_gamma: num(&v, "xi_gamma"),
+        n_banks: num_or(&v, "n_banks", 1.0) as usize,
+        omega_pi: num_or(&v, "omega_pi", 0.0),
+        theta_calvo: num_or(&v, "theta_calvo", 1.0),
+        overdrafts_in_capital_ratio: v
+            .get("overdrafts_in_capital_ratio")
+            .is_some_and(|x| x.as_bool().unwrap()),
     };
     let v = load("austria_2010q1_initial_conditions");
     let ic = InitialConditions {

@@ -216,9 +216,15 @@ pub fn firms_stocks<X: Extension>(
     (K_i, M_i, DS_i, S_i)
 }
 
+/// The lending rate of each firm's bank, `[model.banks.r[firms.B_i[i]] for
+/// i in eachfirm(model)]`.
+fn firms_rate<X>(m: &AbstractModel<X>) -> Vec<f64> {
+    (0..m.prop.I).map(|i| m.banks.r[m.firms.B_i[i]]).collect()
+}
+
 /// `firms_profits` (A.30).
 pub fn firms_profits<X: Extension>(m: &mut AbstractModel<X>) -> Vec<f64> {
-    let (P_bar_HH, r_bar, r) = (m.agg.P_bar_HH, m.cb.r_bar, m.bank.r);
+    let (P_bar_HH, r_bar, r) = (m.agg.P_bar_HH, m.cb.r_bar, firms_rate(m));
     let tau_SIF = m.prop.tau_SIF;
     let f = &m.firms;
     (0..f.len())
@@ -230,7 +236,7 @@ pub fn firms_profits<X: Extension>(m: &mut AbstractModel<X>) -> Vec<f64> {
             let out_depreciation = f.delta_i[i] / f.kappa_i[i] * f.P_CF_i[i] * f.Y_i[i];
             let out_taxes_prods = f.tau_Y_i[i] * f.P_i[i] * f.Y_i[i];
             let out_taxes_capital = f.tau_K_i[i] * f.P_i[i] * f.Y_i[i];
-            let out_loans = r * (f.L_i[i] + pos(-f.D_i[i]));
+            let out_loans = r[i] * (f.L_i[i] + pos(-f.D_i[i]));
             in_sales + in_deposits
                 - out_wages
                 - out_expenses
@@ -244,7 +250,7 @@ pub fn firms_profits<X: Extension>(m: &mut AbstractModel<X>) -> Vec<f64> {
 
 /// `firms_deposits` (A.33, A.34).
 pub fn firms_deposits<X: Extension>(m: &mut AbstractModel<X>) -> Vec<f64> {
-    let (P_bar_HH, r_bar, r) = (m.agg.P_bar_HH, m.cb.r_bar, m.bank.r);
+    let (P_bar_HH, r_bar, r) = (m.agg.P_bar_HH, m.cb.r_bar, firms_rate(m));
     let p = &m.prop;
     let f = &m.firms;
     (0..f.len())
@@ -256,7 +262,7 @@ pub fn firms_deposits<X: Extension>(m: &mut AbstractModel<X>) -> Vec<f64> {
             let taxes_production = -f.tau_K_i[i] * f.P_i[i] * f.Y_i[i];
             let corporate_tax = -p.tau_FIRM * pos(f.Pi_i[i]);
             let dividend_payments = -p.theta_DIV * (1.0 - p.tau_FIRM) * pos(f.Pi_i[i]);
-            let interest_payments = -r * (f.L_i[i] + pos(-f.D_i[i]));
+            let interest_payments = -r[i] * (f.L_i[i] + pos(-f.D_i[i]));
             let interest_received = r_bar * pos(f.D_i[i]);
             let investment_cost = -f.P_CF_i[i] * f.I_i[i];
             let new_credit = f.DL_i[i];

@@ -1,6 +1,5 @@
-//! Time series of national accounts variables, BeforeIT `src/utils/data.jl`.
-//! The per-bank series of BeforeIT's multi-bank extension
-//! (`credit_new_per_bank` and the like) are not collected.
+//! Time series of national accounts variables and of each bank, BeforeIT
+//! `src/utils/data.jl`.
 
 use crate::julia::{sum, sum_by};
 use crate::{AbstractModel, Extension};
@@ -39,6 +38,16 @@ pub struct Data {
     /// Gross value added per sector, nominal and real.
     pub nominal_sector_gva: Vec<Vec<f64>>,
     pub real_sector_gva: Vec<Vec<f64>>,
+    /// New loans of each bank's firms.
+    pub credit_new_per_bank: Vec<Vec<f64>>,
+    /// Loans of each bank's firms.
+    pub credit_stock_per_bank: Vec<Vec<f64>>,
+    /// Equity of each bank.
+    pub equity_per_bank: Vec<Vec<f64>>,
+    /// Net position of each bank at the central bank.
+    pub reserves_per_bank: Vec<Vec<f64>>,
+    /// Profits over equity of each bank, 0 for a bank without equity.
+    pub roe_per_bank: Vec<Vec<f64>>,
 }
 
 /// `collect_data!(m)`: appends the values of the current state; the first
@@ -56,7 +65,7 @@ pub fn collect_data<X: Extension>(m: &mut AbstractModel<X>) {
 }
 
 /// `allocate_new_data!`: appends a 0 to every series and a list of zeros to
-/// the series per sector.
+/// the series per sector and per bank.
 pub fn allocate_new_data<X: Extension>(m: &mut AbstractModel<X>) {
     let d = &mut m.data;
     d.collection_time.push(0);
@@ -91,6 +100,16 @@ pub fn allocate_new_data<X: Extension>(m: &mut AbstractModel<X>) {
     }
     d.nominal_sector_gva.push(vec![0.0; m.prop.G]);
     d.real_sector_gva.push(vec![0.0; m.prop.G]);
+    let n_banks = m.prop.n_banks;
+    for series in [
+        &mut d.credit_new_per_bank,
+        &mut d.credit_stock_per_bank,
+        &mut d.equity_per_bank,
+        &mut d.reserves_per_bank,
+        &mut d.roe_per_bank,
+    ] {
+        series.push(vec![0.0; n_banks]);
+    }
 }
 
 /// Sum of `f(i)` over the firms of each sector.
@@ -102,12 +121,44 @@ fn by_sector<X>(m: &AbstractModel<X>, f: impl Fn(usize) -> f64) -> Vec<f64> {
         .collect()
 }
 
+/// New loans, loans, equity, reserves and return on equity of each bank, as
+/// `update_data_init!` and `update_data_step!` record them.
+fn per_bank<X>(m: &AbstractModel<X>) -> [Vec<f64>; 5] {
+    let (f, b, n) = (&m.firms, &m.banks, m.prop.n_banks);
+    let mut v: [Vec<f64>; 5] = std::array::from_fn(|_| vec![0.0; n]);
+    for k in 0..n {
+        // From left to right, as Julia's `sum` with `init`.
+        v[0][k] = b.firms[k]
+            .iter()
+            .fold(0.0, |s, &id| s + f.DL_i[f.index(id)]);
+        v[1][k] = b.firms[k].iter().fold(0.0, |s, &id| s + f.L_i[f.index(id)]);
+        v[2][k] = b.E_k[k];
+        v[3][k] = b.D_k[k];
+        v[4][k] = if b.E_k[k] != 0.0 {
+            b.Pi_k[k] / b.E_k[k]
+        } else {
+            0.0
+        };
+    }
+    v
+}
+
+/// Stores the series per bank in entry `t`.
+fn set_per_bank(d: &mut Data, t: usize, v: [Vec<f64>; 5]) {
+    let [credit_new, credit_stock, equity, reserves, roe] = v;
+    d.credit_new_per_bank[t].copy_from_slice(&credit_new);
+    d.credit_stock_per_bank[t].copy_from_slice(&credit_stock);
+    d.equity_per_bank[t].copy_from_slice(&equity);
+    d.reserves_per_bank[t].copy_from_slice(&reserves);
+    d.roe_per_bank[t].copy_from_slice(&roe);
+}
+
 /// `update_data_init!`: the initial state, at prices of 1, in the first
 /// entry.
 pub fn update_data_init<X: Extension>(m: &mut AbstractModel<X>) {
     let (p, f) = (&m.prop, &m.firms);
     let I = f.len();
-    let tot_Y_h = sum(&m.w_act.Y_h) + sum(&m.w_inact.Y_h) + sum(&f.Y_h) + m.bank.Y_h;
+    let tot_Y_h = sum(&m.w_act.Y_h) + sum(&m.w_inact.Y_h) + sum(&f.Y_h) + sum(&m.banks.Y_h);
     let (C_G, C_E) = (m.gov.C_G, m.rotw.C_E);
     let gva = |i: usize| f.Y_i[i] * ((1.0 - f.tau_Y_i[i]) - 1.0 / f.beta_i[i]);
     let sector_gva = by_sector(m, gva);
@@ -129,6 +180,7 @@ pub fn update_data_init<X: Extension>(m: &mut AbstractModel<X>) {
     let (pi_EA, Y_EA, Y_I, r_bar) = (m.rotw.pi_EA, m.rotw.Y_EA, m.rotw.Y_I, m.cb.r_bar);
     let (psi, psi_H, tau_G, tau_SIF, tau_EXPORT) =
         (p.psi, p.psi_H, p.tau_G, p.tau_SIF, p.tau_EXPORT);
+    let banks = per_bank(m);
 
     let d = &mut m.data;
     d.nominal_gdp[0] = nominal_gdp;
@@ -158,6 +210,7 @@ pub fn update_data_init<X: Extension>(m: &mut AbstractModel<X>) {
     d.euribor[0] = r_bar;
     d.gdp_deflator_growth_ea[0] = pi_EA;
     d.real_gdp_ea[0] = Y_EA;
+    set_per_bank(d, 0, banks);
     d.collection_time[0] = 1;
 }
 
@@ -166,8 +219,8 @@ pub fn update_data_step<X: Extension>(m: &mut AbstractModel<X>) {
     let (p, f, agg) = (&m.prop, &m.firms, &m.agg);
     let (gov, rotw) = (&m.gov, &m.rotw);
     let I = f.len();
-    let tot_C_h = sum(&m.w_act.C_h) + sum(&m.w_inact.C_h) + sum(&f.C_h) + m.bank.C_h;
-    let tot_I_h = sum(&m.w_act.I_h) + sum(&m.w_inact.I_h) + sum(&f.I_h) + m.bank.I_h;
+    let tot_C_h = sum(&m.w_act.C_h) + sum(&m.w_inact.C_h) + sum(&f.C_h) + sum(&m.banks.C_h);
+    let tot_I_h = sum(&m.w_act.I_h) + sum(&m.w_inact.I_h) + sum(&f.I_h) + sum(&m.banks.I_h);
     let sales_net = |i: usize| (1.0 - f.tau_Y_i[i]) * f.P_i[i] * f.Y_i[i];
     let materials = |i: usize| 1.0 / f.beta_i[i] * f.P_bar_i[i] * f.Y_i[i];
     let real_gva_i = |i: usize| f.Y_i[i] * ((1.0 - f.tau_Y_i[i]) - 1.0 / f.beta_i[i]);
@@ -220,6 +273,7 @@ pub fn update_data_step<X: Extension>(m: &mut AbstractModel<X>) {
     let (P_bar_h, P_bar_CF_h, t_now) = (agg.P_bar_h, agg.P_bar_CF_h, agg.t);
     let (C_j, P_j, C_l, P_l) = (gov.C_j, gov.P_j, rotw.C_l, rotw.P_l);
     let (pi_EA, Y_EA, r_bar) = (rotw.pi_EA, rotw.Y_EA, m.cb.r_bar);
+    let banks = per_bank(m);
 
     let d = &mut m.data;
     let t = d.collection_time.len() - 1;
@@ -250,6 +304,7 @@ pub fn update_data_step<X: Extension>(m: &mut AbstractModel<X>) {
     d.euribor[t] = r_bar;
     d.gdp_deflator_growth_ea[t] = pi_EA;
     d.real_gdp_ea[t] = Y_EA;
+    set_per_bank(d, t, banks);
     d.collection_time[t] = t_now;
 }
 

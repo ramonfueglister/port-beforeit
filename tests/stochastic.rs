@@ -56,10 +56,10 @@ fn market_values(seed: u64) -> [f64; 10] {
     let rng = &mut Xoshiro::seed_from_u64(seed);
     let mut m = Model::new(&p, &ic, rng).unwrap();
     until_goods_market(&mut m, rng);
-    // All households in the order of the authors' test: bank owner,
+    // All households in the order of the authors' test: bank owners,
     // workers, inactive persons, firm owners.
-    let all = |field: fn(&Workers) -> &Vec<f64>, firms: &[f64], bank: f64| {
-        let mut v = vec![bank];
+    let all = |field: fn(&Workers) -> &Vec<f64>, firms: &[f64], banks: &[f64]| {
+        let mut v = banks.to_vec();
         v.extend(field(&m.w_act));
         v.extend(field(&m.w_inact));
         v.extend(firms);
@@ -67,8 +67,8 @@ fn market_values(seed: u64) -> [f64; 10] {
     };
     let f = &m.firms;
     [
-        mean(&all(|w| &w.I_h, &f.I_h, m.bank.I_h)),
-        mean(&all(|w| &w.C_h, &f.C_h, m.bank.C_h)),
+        mean(&all(|w| &w.I_h, &f.I_h, &m.banks.I_h)),
+        mean(&all(|w| &w.C_h, &f.C_h, &m.banks.C_h)),
         mean(&f.I_i),
         mean(&f.DM_i),
         mean(&f.P_bar_i),
