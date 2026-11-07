@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); the forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs of calibrations, simulations and predictions (`save_all_predictions.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | `diff_transform.jl`; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); the forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs of calibrations, simulations and predictions (`save_all_predictions.jl`); the model as one list of numbers and back (`diff_transform.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | the package extensions in `ext/` |
 
 ## Installation
 
@@ -110,6 +110,7 @@ cargo run --release --example austria
 | `get_params_and_initial_conditions(&ITALY_CALIBRATION, Date::new(2010, 3, 31), 0.001, false)?` | `get_params_and_initial_conditions(Bit.ITALY_CALIBRATION, DateTime(2010, 3, 31); scale = 0.001)` |
 | `get_valid_calibration_quarters(&co)?` | `get_valid_calibration_quarters(co)` |
 | `zenodo_calibration_url("AT")?`, then `data/convert_calibration.py` and `CalibrationData::from_json(&text)?` | `download_zenodo_calibration_object("AT")` |
+| `diff_transform::model_to_array(&model)`, `diff_transform::array_to_model(&arr, &model)?` | `Bit.model_to_array(model)`, `Bit.array_to_model(arr, model)` |
 
 `step` calls the rules in the order of BeforeIT `src/one_step.jl`. Each rule
 is a public method named after its Julia function without the `!`, for
@@ -283,6 +284,15 @@ for the benchmarks. `error_table_validation_var` and
 several countries. Parameters, simulations, predictions and forecasts are
 stored as JSON files, with the names of BeforeIT's JLD2 files.
 
+The module `diff_transform` writes the numbers of a model into one list
+(`model_to_array`) and makes a model from such a list (`array_to_model`),
+in the order of BeforeIT.jl: the agent types and then the properties, each
+with the fields of its Julia struct in their order, integers as floats and
+indices counted from 1 as in Julia. BeforeIT's examples
+`examples/automatic_differentiation_*.jl` compute gradients of a simulation
+with respect to these numbers, with Mooncake.jl (reverse mode) and with
+central finite differences; the port has no automatic differentiation.
+
 `cargo doc --open` shows the documentation of every type and rule.
 
 ## Randomness and reproducibility
@@ -382,6 +392,15 @@ from the `libm` crate, not from the system's math library.
    only (CSV.jl also recognises dates and booleans, which the tables do not
    contain), and returns an error for a line with too few or too many
    cells, where CSV.jl warns and fills or widens the table.
+9. **The model as a list of numbers.** `array_to_model` returns an error
+   where Julia throws, and also for an integer that Julia would store but
+   the port's types cannot hold: a negative count, a sector or bank below
+   1, or an employer `O_h` below 1 other than 0 (unemployed, `w_act`) and −1
+   (inactive, `w_inact`). Julia finds the fields by reflection, so its
+   functions also take the fields that a model type adds to an agent type;
+   in the port, a model type provides them through
+   `Extension::push_fields` and `Extension::set_fields`, as `ModelCANVAS`
+   and `ModelGR` do.
 
 ## Where BeforeIT.jl differs from the paper
 
@@ -539,6 +558,15 @@ keeps:
   7.2e-10. Also the checks of `test/utils/analysis_utils.jl` for
   `discover_countries`, the gathering of tables across countries, and that
   failing quarters are skipped.
+- Unit tests of `diff_transform` (BeforeIT.jl has none): the fields in the
+  order of the Julia structs, whose names the test lists as they are in
+  `src/model_init/agents.jl` and `init_properties.jl`, with the length of
+  each; the added fields of `ModelGR` and `ModelCANVAS` after those of their
+  agent types, as `Bit.@object` puts them; that each of the 17 properties of
+  `examples/automatic_differentiation_opt.jl` changes exactly one number at
+  its position; the round trip from one model into another of the same
+  shape; Julia's rounding of integers and `Bool`s; and the length of the
+  list.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -592,6 +620,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/varx.rs` | `src/utils/varx.jl` |
 | `src/correlation.rs` | `src/utils/correlation_utils.jl` |
 | `src/analysis.rs` | `src/utils/analysis_utils.jl`, `error_tables.jl`, `save_all_predictions.jl` |
+| `src/diff_transform.rs` | `src/utils/diff_transform.jl` |
 | `src/calibration.rs`, `data/italy/calibration.json` | `src/utils/calibration.jl`, `_calibration_steady_state.jl`, `standard_calibration_data.jl`, `data/italy/calibration/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/model_extensions/` | `src/model_extensions/` |

@@ -6,6 +6,7 @@
 //! two need data on single households and firms.
 
 use crate::agents::Firms;
+use crate::diff_transform::{Part, set_floats};
 use crate::estimate::estimate_taylor_rule;
 use crate::firms::FirmsDecisions;
 use crate::julia::max;
@@ -186,5 +187,28 @@ impl Extension for Canvas {
         m.ext.Y_EA_series.push(Y_EA);
         m.ext.pi_EA_series.push(pi_EA);
         (Y_EA, gamma_EA, pi_EA)
+    }
+
+    /// `CentralBankCANVAS` adds `r_bar_series` after the fields of
+    /// `CentralBank`, `RestOfTheWorldCANVAS` adds `Y_EA_series` and
+    /// `pi_EA_series` after those of `RestOfTheWorld`.
+    fn push_fields(&self, part: Part, v: &mut Vec<f64>) {
+        match part {
+            Part::CentralBank => v.extend_from_slice(&self.r_bar_series),
+            Part::RestOfTheWorld => {
+                v.extend_from_slice(&self.Y_EA_series);
+                v.extend_from_slice(&self.pi_EA_series);
+            }
+            _ => {}
+        }
+    }
+
+    fn set_fields(&mut self, part: Part, numbers: &[f64]) -> Result<usize, String> {
+        let fields = match part {
+            Part::CentralBank => vec![&mut self.r_bar_series],
+            Part::RestOfTheWorld => vec![&mut self.Y_EA_series, &mut self.pi_EA_series],
+            _ => return Ok(0),
+        };
+        set_floats(fields.into_iter().map(|f| f.as_mut_slice()), numbers)
     }
 }

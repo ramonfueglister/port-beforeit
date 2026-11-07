@@ -35,6 +35,7 @@ pub mod calibration;
 pub mod correlation;
 pub mod data;
 pub mod datasets;
+pub mod diff_transform;
 pub mod estimate;
 pub mod evaluation;
 pub mod extension;

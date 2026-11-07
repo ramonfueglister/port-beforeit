@@ -7,6 +7,7 @@
 //! keeps the process of the paper, so that the input of the Taylor rule
 //! stays consistent with the calibration.
 
+use crate::diff_transform::{Part, set_floats};
 use crate::estimate::estimate_for_calibration_script;
 use crate::julia::sum_by;
 use crate::random::Randomness;
@@ -174,5 +175,55 @@ impl Extension for GrowthRate {
         let Y_m = c_I_g.iter().map(|c| c * Y_I).collect();
         let P_m = P_bar_g.iter().map(|p| p * (1.0 + pi_e)).collect();
         (C_E, Y_I, C_d_l, Y_m, P_m)
+    }
+
+    /// `GovernmentGR` adds `alpha_G_gr`, `beta_G_gr`, `sigma_G_gr` and
+    /// `g_prev_C_G` after the fields of `Government`, `RestOfTheWorldGR` adds
+    /// `alpha_E_gr`, `beta_E_gr`, `sigma_E_gr`, `alpha_I_gr`, `beta_I_gr`,
+    /// `sigma_I_gr`, `g_prev_C_E` and `g_prev_Y_I` after those of
+    /// `RestOfTheWorld`.
+    fn push_fields(&self, part: Part, v: &mut Vec<f64>) {
+        match part {
+            Part::Government => v.extend([
+                self.alpha_G_gr,
+                self.beta_G_gr,
+                self.sigma_G_gr,
+                self.g_prev_C_G,
+            ]),
+            Part::RestOfTheWorld => v.extend([
+                self.alpha_E_gr,
+                self.beta_E_gr,
+                self.sigma_E_gr,
+                self.alpha_I_gr,
+                self.beta_I_gr,
+                self.sigma_I_gr,
+                self.g_prev_C_E,
+                self.g_prev_Y_I,
+            ]),
+            _ => {}
+        }
+    }
+
+    fn set_fields(&mut self, part: Part, numbers: &[f64]) -> Result<usize, String> {
+        let fields = match part {
+            Part::Government => vec![
+                &mut self.alpha_G_gr,
+                &mut self.beta_G_gr,
+                &mut self.sigma_G_gr,
+                &mut self.g_prev_C_G,
+            ],
+            Part::RestOfTheWorld => vec![
+                &mut self.alpha_E_gr,
+                &mut self.beta_E_gr,
+                &mut self.sigma_E_gr,
+                &mut self.alpha_I_gr,
+                &mut self.beta_I_gr,
+                &mut self.sigma_I_gr,
+                &mut self.g_prev_C_E,
+                &mut self.g_prev_Y_I,
+            ],
+            _ => return Ok(0),
+        };
+        set_floats(fields.into_iter().map(std::slice::from_mut), numbers)
     }
 }

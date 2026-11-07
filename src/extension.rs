@@ -22,6 +22,7 @@
 use crate::AbstractModel;
 use crate::agents::{Firms, Households};
 use crate::base;
+use crate::diff_transform::Part;
 use crate::firms::FirmsDecisions;
 use crate::random::Randomness;
 
@@ -416,5 +417,27 @@ pub trait Extension: Sized {
     /// `update_data_step!(model)`.
     fn update_data_step(m: &mut AbstractModel<Self>) {
         base::update_data_step(m)
+    }
+
+    // ---- src/utils/diff_transform.jl ----
+
+    /// Appends the numbers of the fields that the model type adds to the
+    /// agent type of `part`, for
+    /// [`model_to_array`](crate::diff_transform::model_to_array). In
+    /// BeforeIT.jl such an agent type is made with
+    /// `Bit.@object NewType(BaseType)`, which puts its own fields after those
+    /// of the base type, and `model_to_array` takes those that hold a number
+    /// or a vector or matrix of numbers. The default adds nothing.
+    fn push_fields(&self, part: Part, v: &mut Vec<f64>) {}
+
+    /// Sets the fields of [`push_fields`](Self::push_fields) from the start
+    /// of `numbers`, for
+    /// [`array_to_model`](crate::diff_transform::array_to_model), and returns
+    /// how many numbers it took; vectors keep their length. Returns an error
+    /// where Julia throws, for example if `numbers` is too short
+    /// ([`set_floats`](crate::diff_transform::set_floats) checks that). The
+    /// default takes nothing.
+    fn set_fields(&mut self, part: Part, numbers: &[f64]) -> Result<usize, String> {
+        Ok(0)
     }
 }
