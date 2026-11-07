@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); the forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs of calibrations, simulations and predictions (`save_all_predictions.jl`); the model as one list of numbers and back (`diff_transform.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); the forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs of calibrations, simulations and predictions (`save_all_predictions.jl`); the model as one list of numbers and back (`diff_transform.jl`); the plots of the package extension `ext/BeforeITPlots` (feature `plots`); and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | the package extensions `ext/BeforeITFormat` and `ext/BeforeITMooncake` |
 
 ## Installation
 
@@ -56,7 +56,14 @@ It needs Rust 1.88 or newer. It depends on
 [`libm`](https://crates.io/crates/libm) and, to read the data sets,
 [`serde_json`](https://crates.io/crates/serde_json) with the feature
 `float_roundtrip`, so that every number is read as the nearest `f64`, as
-Julia reads it; it contains no `unsafe` code.
+Julia reads it; it contains no `unsafe` code. The plots, BeforeIT.jl's
+package extension for Plots.jl, need the feature `plots`, which adds
+[`plotters`](https://crates.io/crates/plotters) to draw them as SVG:
+
+```toml
+[dependencies]
+beforeit = { git = "https://github.com/ramonfueglister/port-beforeit", features = ["plots"] }
+```
 
 ## Usage
 
@@ -111,6 +118,11 @@ cargo run --release --example austria
 | `get_valid_calibration_quarters(&co)?` | `get_valid_calibration_quarters(co)` |
 | `zenodo_calibration_url("AT")?`, then `data/convert_calibration.py` and `CalibrationData::from_json(&text)?` | `download_zenodo_calibration_object("AT")` |
 | `diff_transform::model_to_array(&model)`, `diff_transform::array_to_model(&arr, &model)?` | `Bit.model_to_array(model)`, `Bit.array_to_model(arr, model)` |
+| `plots::plot_data(&model, DEFAULT_TITLEFONT, &DEFAULT_QUANTITIES)?` | `Bit.plot_data(model)` |
+| `plots::plot_data_vector(&models, DEFAULT_TITLEFONT, &DEFAULT_QUANTITIES, None, None)?` | `Bit.plot_data_vector(models)` |
+| `plots::plot_data_vectors(&[models_a, models_b], DEFAULT_TITLEFONT, &DEFAULT_QUANTITIES)?` | `Bit.plot_data_vectors([models_a, models_b])` |
+| `plots::plot_model_vs_real(&model, &real, "real_gdp_quarterly", true)?` | `Bit.plot_model_vs_real(model, real, "real_gdp_quarterly")` |
+| `plots::layout_svg(&ps, (3, 3), DEFAULT_SIZE)?`, `p.to_svg(DEFAULT_SIZE)?` | `plot(ps..., layout = (3, 3))`, `savefig(p, "p.svg")` |
 
 `step` calls the rules in the order of BeforeIT `src/one_step.jl`. Each rule
 is a public method named after its Julia function without the `!`, for
@@ -293,6 +305,15 @@ indices counted from 1 as in Julia. BeforeIT's examples
 with respect to these numbers, with Mooncake.jl (reverse mode) and with
 central finite differences; the port has no automatic differentiation.
 
+With the feature `plots`, the module `plots` has the functions of BeforeIT's
+package extension for Plots.jl: `plot_data` draws the series of one model,
+`plot_data_vector` the mean over several runs with a band of one standard
+deviation (StatsPlots' `errorline`), `plot_data_vectors` several such
+ensembles in one plot, and `plot_model_vs_real` predictions against the
+data. They return `Plot` values with the series, colours, titles, limits
+and ticks that BeforeIT.jl hands to Plots.jl; `layout_svg` and
+`Plot::to_svg` draw them as SVG.
+
 `cargo doc --open` shows the documentation of every type and rule.
 
 ## Randomness and reproducibility
@@ -401,6 +422,16 @@ from the `libm` crate, not from the system's math library.
    in the port, a model type provides them through
    `Extension::push_fields` and `Extension::set_fields`, as `ModelCANVAS`
    and `ModelGR` do.
+10. **Plots.** The plot functions return the content of the plots (series,
+    bands, colours of Plots.jl's default palette, titles, font sizes,
+    limits, ticks, legend) instead of Plots.jl objects, and `plotters`
+    draws them as SVG: fonts, margins, axes and the format of the tick
+    numbers are those of `plotters` (large and small numbers on the y axis
+    with a power of ten, such as `3.95e11`); tick labels are not rotated,
+    and a line that leaves the x limits ends at its last point inside them.
+    The functions return an error where Julia throws, also for a `missing`
+    value of the data within the period of the predictions in
+    `plot_model_vs_real`.
 
 ## Where BeforeIT.jl differs from the paper
 
@@ -567,6 +598,13 @@ keeps:
   its position; the round trip from one model into another of the same
   shape; Julia's rounding of integers and `Bool`s; and the length of the
   list.
+- Unit tests of `plots`, with `--features plots`: the mean and standard
+  deviation of StatsPlots' `errorline` (NaN ignored, as NaNMath.jl does)
+  and its handling of the shape of `y`; the titles, series, colours and
+  time ranges of the four functions; the limits and year ticks of
+  `plot_model_vs_real` against values computed by hand, with and without
+  `crop`; and that the SVG drawings contain the titles, bands, labels and
+  ticks. The drawings were also checked by eye in a browser.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -593,8 +631,9 @@ The data sets and the reference values are converted from files of
 BeforeIT.jl by [`data/convert.py`](data/convert.py),
 [`data/convert_calibration.py`](data/convert_calibration.py) and
 [`tests/data/convert.py`](tests/data/convert.py), which reproduce them byte
-for byte. CI checks the formatting and runs `cargo clippy` and the
-tests on stable Rust, and the tests on Rust 1.88.
+for byte. CI checks the formatting and runs `cargo clippy` (with and without the
+feature `plots`) and the tests with all features on stable Rust, and the
+tests with all features on Rust 1.88.
 
 ## Layout
 
@@ -621,6 +660,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/correlation.rs` | `src/utils/correlation_utils.jl` |
 | `src/analysis.rs` | `src/utils/analysis_utils.jl`, `error_tables.jl`, `save_all_predictions.jl` |
 | `src/diff_transform.rs` | `src/utils/diff_transform.jl` |
+| `src/plots.rs` | `ext/BeforeITPlots/BeforeITPlots.jl`; `errorline` of StatsPlots.jl; `mean` and `std` of NaNMath.jl; the default palette of Plots.jl |
 | `src/calibration.rs`, `data/italy/calibration.json` | `src/utils/calibration.jl`, `_calibration_steady_state.jl`, `standard_calibration_data.jl`, `data/italy/calibration/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/model_extensions/` | `src/model_extensions/` |

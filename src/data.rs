@@ -67,6 +67,16 @@ macro_rules! fields {
                 }
             }
 
+            /// The list per collection called `name` (per sector or per
+            /// bank), Julia `getproperty(data, Symbol(name))` for these
+            /// fields, or `None` if there is no such list.
+            pub fn lists_by_name(&self, name: &str) -> Option<&[Vec<f64>]> {
+                match name {
+                    $(stringify!($l) => Some(&self.$l),)*
+                    _ => None,
+                }
+            }
+
             fn to_json_value(&self) -> serde_json::Value {
                 let numbers = |v: &[f64]| -> serde_json::Value {
                     v.iter().map(|&x| json_number(x)).collect()

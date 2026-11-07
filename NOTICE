@@ -13,5 +13,9 @@ The files in data and tests/data are converted from files of BeforeIT.jl
 The changes with respect to BeforeIT.jl are described in README.md, section
 "Differences from BeforeIT.jl".
 
+src/plots.rs also follows errorline of StatsPlots.jl and mean and std of
+NaNMath.jl, and uses the colours of the default palette of Plots.jl
+(computed by PlotUtils.jl); these packages are under the MIT License.
+
 This product is not affiliated with or endorsed by the authors of
 BeforeIT.jl, Banca d'Italia or the Bank of England.

@@ -42,6 +42,8 @@ pub mod extension;
 pub mod julia;
 pub mod model_extensions;
 pub mod params;
+#[cfg(feature = "plots")]
+pub mod plots;
 pub mod predictions;
 pub mod random;
 pub mod shocks;

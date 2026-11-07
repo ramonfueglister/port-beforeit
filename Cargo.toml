@@ -12,6 +12,11 @@ categories = ["simulation", "science"]
 include = ["src/**", "data/**", "tests/**", "examples/**", "README.md", "LICENSE", "NOTICE", "CITATION.cff"]
 publish = false
 
+[features]
+# The plots of BeforeIT's package extension ext/BeforeITPlots, drawn as SVG.
+plots = ["dep:plotters"]
+
 [dependencies]
 libm = "0.2.16"
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
+plotters = { version = "0.3.7", default-features = false, features = ["svg_backend"], optional = true }
