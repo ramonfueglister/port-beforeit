@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | Calibration with its data `ITALY_CALIBRATION`, prediction pipelines and forecast evaluation; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | Prediction pipelines and forecast evaluation; the package extensions in `ext/` |
 
 ## Installation
 
@@ -107,6 +107,9 @@ cargo run --release --example austria
 | `let i = model.w_act.index(id); model.w_act.Y_h[i]` | `model.w_act[id].Y_h` |
 | `model.w_act.getfields(id)`, `model.w_act.delete(id)`, `model.w_act.push(worker)` | `getfields(model.w_act[id])`, `delete!(model.w_act, id)`, `push!(model.w_act, t)` |
 | `DataVector::from_models(&models).series(\|d\| &d.real_gdp)` | `DataVector(models).real_gdp` |
+| `get_params_and_initial_conditions(&ITALY_CALIBRATION, Date::new(2010, 3, 31), 0.001, false)?` | `get_params_and_initial_conditions(Bit.ITALY_CALIBRATION, DateTime(2010, 3, 31); scale = 0.001)` |
+| `get_valid_calibration_quarters(&co)?` | `get_valid_calibration_quarters(co)` |
+| `zenodo_calibration_url("AT")?`, then `data/convert_calibration.py` and `CalibrationData::from_json(&text)?` | `download_zenodo_calibration_object("AT")` |
 
 `step` calls the rules in the order of BeforeIT `src/one_step.jl`. Each rule
 is a public method named after its Julia function without the `!`, for
@@ -164,6 +167,41 @@ and each model of the ensemble draws from its own generator, split off from
 the given one in a fixed order (`Randomness::split`), so a parallel run is
 reproducible and does not depend on the number of threads; it differs from
 the serial run with the same seed, as in BeforeIT.jl.
+
+The calibration computes parameters and initial conditions from national
+accounts, input-output tables and time series, as BeforeIT
+`src/utils/calibration.jl`:
+
+```rust
+use beforeit::{Date, ITALY_CALIBRATION, Model, Xoshiro, get_params_and_initial_conditions};
+
+/// A model of Italy calibrated on 2012Q3, with 0.001 agents per person or
+/// firm of the data.
+fn italy_2012q3() -> Result<Model, String> {
+    let c = get_params_and_initial_conditions(&ITALY_CALIBRATION, Date::new(2012, 9, 30), 0.001, false)?;
+    for w in &c.warnings {
+        eprintln!("{w}");
+    }
+    let mut rng = Xoshiro::seed_from_u64(1);
+    Model::new(&c.parameters, &c.initial_conditions, &mut rng)
+}
+```
+
+`ITALY_CALIBRATION` holds the calibration data of BeforeIT.jl for Italy, for
+the quarters 2010Q1 to 2016Q4 (`get_valid_calibration_quarters`); the last
+argument is BeforeIT's option `use_growth_rate_ar1`. The messages that
+BeforeIT.jl logs with `@warn` are returned in `warnings`. For the 27 member
+states of the EU, BeforeIT.jl downloads calibration objects (JLD2 files) from
+the Zenodo record [*EuroStat Tables for BeforeIT Calibration*](https://doi.org/10.5281/zenodo.18698434)
+(Reiter, Hoekstra, Meligrana and Glielmo, 2026, CC BY 4.0).
+The port reads neither HTTP nor JLD2: `zenodo_calibration_url` gives the
+address of a country's file, [`data/convert_calibration.py`](data/convert_calibration.py)
+converts it to JSON (with `h5py`), and `CalibrationData::from_json` reads the
+result. `beforeit::calibration::get_params_and_initial_conditions_steady_state`
+is the variant of `_calibration_steady_state.jl` with interest, the government
+deficit and the AR(1) and Taylor rule coefficients set for a steady state;
+its result for 2010Q1 is `STEADY_STATE2010Q1` up to the rounding described
+below.
 
 `cargo doc --open` shows the documentation of every type and rule.
 
@@ -240,6 +278,12 @@ from the `libm` crate, not from the system's math library.
    the products' results in the order of the products, as the serial
    version does. Without randomness, parallel and serial runs are
    therefore identical.
+7. **Calibration.** Where BeforeIT.jl would throw (for example for a date
+   that is not in the data) or would carry a `missing` value of the data
+   into a parameter, the port returns an error message. BeforeIT.jl stores
+   the GDP deflators in the caller's dictionaries `data` and `ea`; the port
+   does not change the calibration data. Dates are calendar days: Julia's
+   `num2date` also keeps a time of day, which the calibration never uses.
 
 ## Where BeforeIT.jl differs from the paper
 
@@ -252,6 +296,29 @@ complete.
 | Price index (A.12) | Weighted by the sales of the domestic firms and of the foreign producers | Weighted by the production of the domestic firms, as in the authors' MATLAB code (`detabm.m`, lines 301 and 302) |
 | Policy rate (A.69) | Taylor rule without a lower bound | Not below 0 (`pos` in `taylor_rule`); the MATLAB code has no lower bound (`detabm.m`, line 98) |
 | Choice of a seller (A.1.1) | The size of a firm is its production | The size of a firm is its production plus its inventories, as in the MATLAB code (`search_and_matching_det.m`, line 10) |
+
+The calibration code of BeforeIT.jl has these properties, which the port
+keeps:
+
+- `get_params_and_initial_conditions_steady_state` finds the year of the
+  calibration with `findall(...)[1][1]`, the row of the first match. In
+  `ITALY_CALIBRATION` the years are a row, so it always uses the first year,
+  2010, whatever the date.
+- `_calibration_steady_state.jl` rounds the numbers of agents with
+  `matlab_round` (ties up). `STEADY_STATE2010Q1` was made with Julia's
+  `round` (ties to even): three sectors have one employee more in the port's
+  result, and `J`, `H_act` and the values divided by them differ
+  accordingly (see `tests/calibration.rs`).
+- `ITALY2010Q1` and the MATLAB values in
+  `test/matlab_code/italy_calibration` were made with earlier versions of
+  the calibration; the current `calibration.jl` gives other values for
+  2010Q1 (for example `tau_Y_s = 0`, since it sets `taxes_products` to
+  zero). BeforeIT's `test/calibration_script.jl` no longer compares them: the
+  comparison with MATLAB is commented out, and the remaining check compares
+  each initial condition with itself.
+- With `use_growth_rate_ar1`, the calibration returns `use_growth_rate_ar1`
+  and the growth rates `g_G`, `g_E` and `g_I`, which no model of BeforeIT.jl
+  reads; `ModelGR` estimates its growth-rate processes itself.
 
 ## Verification
 
@@ -315,6 +382,22 @@ complete.
   `test/steady_state.jl`: with `STEADY_STATE2010Q1`, every national
   accounts series stays constant over five quarters within the tolerances
   of the Julia test.
+- [`tests/calibration.rs`](tests/calibration.rs): the calibration of
+  `ITALY_CALIBRATION` for 2010Q1, and for 2019Q4 with `use_growth_rate_ar1`
+  (a date after the time series, where the histories end in NaN), against an
+  independent NumPy translation of `calibration.jl`
+  ([`tests/data/calibration_reference.py`](tests/data/calibration_reference.py)):
+  the estimates of the AR(1) processes within 1e-8 (relative; see the test
+  for why), all other values within 1e-11, and the same warnings. The
+  steady-state calibration against `STEADY_STATE2010Q1`: within 1e-12
+  except for the rounding described above, which the test checks entry by
+  entry. Also the valid quarters, errors for dates without data, models
+  built from calibrations run, and calibrations survive JSON. As
+  `test/utils/zenodo_calibration.jl`, an ignored test calibrates converted
+  Zenodo calibration objects (`cargo test --test calibration -- --ignored`,
+  see the test); it passes for AT, DE and FR, and for these three the port
+  also agrees with the NumPy translation for 2010Q1, 2020Q1 and 2023Q4 with
+  and without `use_growth_rate_ar1` within the same tolerances.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -336,7 +419,8 @@ complete.
   `test/deterministic/epsilon.jl`.
 
 The data sets and the reference values are converted from files of
-BeforeIT.jl by [`data/convert.py`](data/convert.py) and
+BeforeIT.jl by [`data/convert.py`](data/convert.py),
+[`data/convert_calibration.py`](data/convert_calibration.py) and
 [`tests/data/convert.py`](tests/data/convert.py), which reproduce them byte
 for byte. CI checks the formatting and runs `cargo clippy` and the
 tests on stable Rust, and the tests on Rust 1.88.
@@ -360,6 +444,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/data.rs` | `src/utils/data.jl` |
 | `src/accounting.rs` | `src/utils/get_accounting_identities.jl` |
 | `src/datasets.rs`, `data/` | `src/utils/standard_params_initial_conditions.jl`, `data/` |
+| `src/calibration.rs`, `data/italy/calibration.json` | `src/utils/calibration.jl`, `_calibration_steady_state.jl`, `standard_calibration_data.jl`, `data/italy/calibration/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/model_extensions/` | `src/model_extensions/` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
@@ -398,7 +483,9 @@ form.
 Apache License 2.0, like BeforeIT.jl; see [`LICENSE`](LICENSE). The port is a
 derivative work of BeforeIT.jl, Copyright 2024 Banca d'Italia and the authors;
 see [`NOTICE`](NOTICE). The files in `data` and `tests/data` are converted
-from files of BeforeIT.jl. The online appendix of the paper (CC BY-NC-ND 4.0) is cited by
+from files of BeforeIT.jl, except the reference values of the calibration
+test, which `tests/data/calibration_reference.py` computes from
+`data/italy/calibration.json`. The online appendix of the paper (CC BY-NC-ND 4.0) is cited by
 its equation and table numbers; its text is not reproduced.
 
 The disclaimer of BeforeIT.jl applies to the model: "All views expressed are

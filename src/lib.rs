@@ -18,7 +18,9 @@
 //! `firms_profits`, ...) whose result a `set_` function stores (`set_banks_rate`,
 //! `set_firms_profits`, ...), and a model type can replace any rule; see
 //! [`Extension`]. [`Model`] is BeforeIT's `Model`. [`AUSTRIA2010Q1`],
-//! [`ITALY2010Q1`] and [`STEADY_STATE2010Q1`] are BeforeIT's data sets.
+//! [`ITALY2010Q1`] and [`STEADY_STATE2010Q1`] are BeforeIT's data sets;
+//! [`get_params_and_initial_conditions`] computes parameters and initial
+//! conditions from calibration data such as [`ITALY_CALIBRATION`].
 //!
 //! Indices start at 0: sector `g` and firm `i` are Julia's `g + 1` and `i + 1`.
 //! Where this port deliberately differs from the Julia code is listed in
@@ -28,6 +30,7 @@
 #![allow(non_snake_case, clippy::needless_range_loop)]
 
 pub mod agents;
+pub mod calibration;
 pub mod data;
 pub mod datasets;
 pub mod estimate;
@@ -53,6 +56,10 @@ pub use agents::{
     Workers,
 };
 pub use bank::taylor_rule;
+pub use calibration::{
+    Calibration, CalibrationData, Date, ITALY_CALIBRATION, get_params_and_initial_conditions,
+    get_valid_calibration_quarters,
+};
 pub use data::{Data, DataVector};
 pub use datasets::{AUSTRIA2010Q1, ITALY2010Q1, InitialState, STEADY_STATE2010Q1};
 pub use extension::{Extension, Standard};

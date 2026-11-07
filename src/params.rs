@@ -139,6 +139,17 @@ pub struct Parameters {
     /// `false` (loans only) when the key `overdrafts_in_capital_ratio` is
     /// missing.
     pub overdrafts_in_capital_ratio: bool,
+    /// Number of industries `S`, forecast horizon `T` and the number of
+    /// those quarters for which data exist, `T_max`. The calibration writes
+    /// them and the data sets have them; the model does not use them.
+    pub S: Option<usize>,
+    pub T: Option<usize>,
+    pub T_max: Option<usize>,
+    /// Whether the calibration estimated the AR(1) processes of government
+    /// consumption, exports and imports on growth rates (see
+    /// [`crate::calibration::get_params_and_initial_conditions`]); the
+    /// model does not use it.
+    pub use_growth_rate_ar1: Option<bool>,
 }
 
 /// Initial conditions (BeforeIT `initial_conditions`). Time series start with
@@ -193,6 +204,12 @@ pub struct InitialConditions {
     pub r_bar_series: Vec<f64>,
     pub Y_EA_series: Vec<f64>,
     pub pi_EA_series: Vec<f64>,
+    /// Last growth rates of government consumption, exports and imports,
+    /// which the calibration adds when it estimates on growth rates; the
+    /// model does not use them.
+    pub g_G: Option<f64>,
+    pub g_E: Option<f64>,
+    pub g_I: Option<f64>,
 }
 
 /// Values that stay fixed during a run, BeforeIT `Properties`.
@@ -392,7 +409,11 @@ fn get<'a>(o: &'a Object, key: &str) -> Result<&'a serde_json::Value, String> {
     o.get(key).ok_or_else(|| format!("{key} is missing"))
 }
 
+/// A number; `null` stands for NaN, which JSON cannot express.
 fn as_number(v: &serde_json::Value, key: &str) -> Result<f64, String> {
+    if v.is_null() {
+        return Ok(f64::NAN);
+    }
     v.as_f64().ok_or_else(|| format!("{key} is not a number"))
 }
 
@@ -420,7 +441,7 @@ fn list(o: &Object, key: &str) -> Result<Vec<f64>, String> {
     let rows = get(o, key)?
         .as_array()
         .ok_or_else(|| format!("{key} is not a list"))?;
-    if rows.iter().all(|x| x.is_number()) {
+    if rows.iter().all(|x| x.is_number() || x.is_null()) {
         return rows.iter().map(|x| as_number(x, key)).collect();
     }
     let m = matrix(o, key)?;
@@ -454,12 +475,29 @@ fn number_or(o: &Object, key: &str, default: f64) -> Result<f64, String> {
     o.get(key).map_or(Ok(default), |v| as_number(v, key))
 }
 
+fn optional_number(o: &Object, key: &str) -> Result<Option<f64>, String> {
+    o.get(key).map(|v| as_number(v, key)).transpose()
+}
+
+fn optional_count(o: &Object, key: &str) -> Result<Option<usize>, String> {
+    optional_number(o, key)?
+        .map(|x| as_count(x, key))
+        .transpose()
+}
+
+/// A list of numbers in JSON; NaN becomes `null`.
+fn numbers(v: &[f64]) -> serde_json::Value {
+    v.iter().map(|&x| serde_json::Value::from(x)).collect()
+}
+
 impl Parameters {
     /// Reads `parameters` from a JSON object whose keys are BeforeIT's, such
     /// as the files in the crate's folder `data`. Counts may be floats, as in
     /// BeforeIT's JLD2 files. `n_banks`, `omega_pi`, `theta_calvo` and
     /// `overdrafts_in_capital_ratio` may be missing; they then get
-    /// BeforeIT's defaults 1, 0, 1 and false. Other keys are ignored.
+    /// BeforeIT's defaults 1, 0, 1 and false; `S`, `T`, `T_max` and
+    /// `use_growth_rate_ar1` may be missing too. `null` stands for NaN.
+    /// Other keys are ignored.
     pub fn from_json(text: &str) -> Result<Parameters, String> {
         let o = &object(text, "parameters")?;
         let c = matrix(o, "C")?;
@@ -546,14 +584,120 @@ impl Parameters {
             omega_pi: number_or(o, "omega_pi", 0.0)?,
             theta_calvo: number_or(o, "theta_calvo", 1.0)?,
             overdrafts_in_capital_ratio: overdrafts,
+            S: optional_count(o, "S")?,
+            T: optional_count(o, "T")?,
+            T_max: optional_count(o, "T_max")?,
+            use_growth_rate_ar1: match o.get("use_growth_rate_ar1") {
+                None => None,
+                Some(v) => Some(
+                    v.as_bool()
+                        .ok_or("use_growth_rate_ar1 is not a Bool".to_string())?,
+                ),
+            },
         })
+    }
+
+    /// Writes the parameters as a JSON object with BeforeIT's keys, which
+    /// [`Parameters::from_json`] reads back. Missing optional values are
+    /// left out; NaN is written as `null`.
+    pub fn to_json(&self) -> String {
+        let mut o = Object::new();
+        let mut put = |key: &str, v: serde_json::Value| {
+            o.insert(key.to_string(), v);
+        };
+        let counts = |v: &[usize]| serde_json::Value::from(v.to_vec());
+        put("G", self.G.into());
+        put("T_prime", self.T_prime.into());
+        put("H_act", self.H_act.into());
+        put("H_inact", self.H_inact.into());
+        put("J", self.J.into());
+        put("L", self.L.into());
+        put("I_s", counts(&self.I_s));
+        for (key, v) in [
+            ("alpha_s", &self.alpha_s),
+            ("beta_s", &self.beta_s),
+            ("kappa_s", &self.kappa_s),
+            ("delta_s", &self.delta_s),
+            ("w_s", &self.w_s),
+            ("tau_Y_s", &self.tau_Y_s),
+            ("tau_K_s", &self.tau_K_s),
+            ("b_CF_g", &self.b_CF_g),
+            ("b_CFH_g", &self.b_CFH_g),
+            ("b_HH_g", &self.b_HH_g),
+            ("c_G_g", &self.c_G_g),
+            ("c_E_g", &self.c_E_g),
+            ("c_I_g", &self.c_I_g),
+        ] {
+            put(key, numbers(v));
+        }
+        put("a_sg", self.a_sg.iter().map(|r| numbers(r)).collect());
+        put("C", self.C.iter().map(|r| numbers(r)).collect());
+        for (key, x) in [
+            ("tau_INC", self.tau_INC),
+            ("tau_FIRM", self.tau_FIRM),
+            ("tau_VAT", self.tau_VAT),
+            ("tau_SIF", self.tau_SIF),
+            ("tau_SIW", self.tau_SIW),
+            ("tau_EXPORT", self.tau_EXPORT),
+            ("tau_CF", self.tau_CF),
+            ("tau_G", self.tau_G),
+            ("theta_UB", self.theta_UB),
+            ("psi", self.psi),
+            ("psi_H", self.psi_H),
+            ("mu", self.mu),
+            ("theta_DIV", self.theta_DIV),
+            ("theta", self.theta),
+            ("zeta", self.zeta),
+            ("zeta_LTV", self.zeta_LTV),
+            ("zeta_b", self.zeta_b),
+            ("alpha_G", self.alpha_G),
+            ("beta_G", self.beta_G),
+            ("sigma_G", self.sigma_G),
+            ("alpha_E", self.alpha_E),
+            ("beta_E", self.beta_E),
+            ("sigma_E", self.sigma_E),
+            ("alpha_I", self.alpha_I),
+            ("beta_I", self.beta_I),
+            ("sigma_I", self.sigma_I),
+            ("alpha_pi_EA", self.alpha_pi_EA),
+            ("beta_pi_EA", self.beta_pi_EA),
+            ("sigma_pi_EA", self.sigma_pi_EA),
+            ("alpha_Y_EA", self.alpha_Y_EA),
+            ("beta_Y_EA", self.beta_Y_EA),
+            ("sigma_Y_EA", self.sigma_Y_EA),
+            ("r_G", self.r_G),
+            ("rho", self.rho),
+            ("r_star", self.r_star),
+            ("pi_star", self.pi_star),
+            ("xi_pi", self.xi_pi),
+            ("xi_gamma", self.xi_gamma),
+            ("omega_pi", self.omega_pi),
+            ("theta_calvo", self.theta_calvo),
+        ] {
+            put(key, x.into());
+        }
+        put("n_banks", self.n_banks.into());
+        put(
+            "overdrafts_in_capital_ratio",
+            self.overdrafts_in_capital_ratio.into(),
+        );
+        for (key, x) in [("S", self.S), ("T", self.T), ("T_max", self.T_max)] {
+            if let Some(x) = x {
+                put(key, x.into());
+            }
+        }
+        if let Some(b) = self.use_growth_rate_ar1 {
+            put("use_growth_rate_ar1", b.into());
+        }
+        serde_json::Value::Object(o).to_string()
     }
 }
 
 impl InitialConditions {
     /// Reads `initial_conditions` from a JSON object whose keys are
     /// BeforeIT's, such as the files in the crate's folder `data`. The
-    /// series of the CANVAS model may be missing. Other keys are ignored.
+    /// series of the CANVAS model and the growth rates `g_G`, `g_E` and `g_I`
+    /// may be missing. `null` stands for NaN. Other keys are ignored.
     pub fn from_json(text: &str) -> Result<InitialConditions, String> {
         let o = &object(text, "initial_conditions")?;
         let n = |key| number(o, key);
@@ -589,6 +733,62 @@ impl InitialConditions {
             r_bar_series: optional("r_bar_series")?,
             Y_EA_series: optional("Y_EA_series")?,
             pi_EA_series: optional("pi_EA_series")?,
+            g_G: optional_number(o, "g_G")?,
+            g_E: optional_number(o, "g_E")?,
+            g_I: optional_number(o, "g_I")?,
         })
+    }
+
+    /// Writes the initial conditions as a JSON object with BeforeIT's keys,
+    /// which [`InitialConditions::from_json`] reads back. Empty series of
+    /// the CANVAS model and missing growth rates are left out; NaN, which
+    /// the histories `C_G`, `C_E` and `Y_I` of a recent calibration contain,
+    /// is written as `null`.
+    pub fn to_json(&self) -> String {
+        let mut o = Object::new();
+        for (key, x) in [
+            ("D_H", self.D_H),
+            ("D_I", self.D_I),
+            ("D_RoW", self.D_RoW),
+            ("E_CB", self.E_CB),
+            ("E_k", self.E_k),
+            ("K_H", self.K_H),
+            ("L_G", self.L_G),
+            ("L_I", self.L_I),
+            ("Y_EA", self.Y_EA),
+            ("pi_EA", self.pi_EA),
+            ("omega", self.omega),
+            ("r_bar", self.r_bar),
+            ("sb_inact", self.sb_inact),
+            ("sb_other", self.sb_other),
+            ("w_UB", self.w_UB),
+        ] {
+            o.insert(key.to_string(), x.into());
+        }
+        for (key, v) in [
+            ("N_s", &self.N_s),
+            ("Y", &self.Y),
+            ("pi", &self.pi),
+            ("Y_I", &self.Y_I),
+            ("C_E", &self.C_E),
+            ("C_G", &self.C_G),
+        ] {
+            o.insert(key.to_string(), numbers(v));
+        }
+        for (key, v) in [
+            ("r_bar_series", &self.r_bar_series),
+            ("Y_EA_series", &self.Y_EA_series),
+            ("pi_EA_series", &self.pi_EA_series),
+        ] {
+            if !v.is_empty() {
+                o.insert(key.to_string(), numbers(v));
+            }
+        }
+        for (key, x) in [("g_G", self.g_G), ("g_E", self.g_E), ("g_I", self.g_I)] {
+            if let Some(x) = x {
+                o.insert(key.to_string(), x.into());
+            }
+        }
+        serde_json::Value::Object(o).to_string()
     }
 }
