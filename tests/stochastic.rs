@@ -19,7 +19,7 @@ fn until_goods_market(m: &mut Model, rng: &mut dyn Randomness) {
     m.set_growth_inflation_EA(rng);
     m.set_central_bank_rate();
     m.set_banks_rate();
-    m.set_firms_expectations_and_decisions();
+    m.set_firms_expectations_and_decisions(rng);
     m.search_and_matching_credit(rng);
     m.search_and_matching_labour(rng);
     m.set_firms_wages();
@@ -32,7 +32,7 @@ fn until_goods_market(m: &mut Model, rng: &mut dyn Randomness) {
     m.set_households_budget_firms();
     m.set_households_budget_banks();
     m.set_gov_expenditure(rng);
-    m.set_rotw_import_export();
+    m.set_rotw_import_export(rng);
     m.search_and_matching(rng);
 }
 

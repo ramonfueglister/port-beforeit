@@ -2,8 +2,8 @@
 //! The per-bank series of BeforeIT's multi-bank extension
 //! (`credit_new_per_bank` and the like) are not collected.
 
-use crate::Model;
 use crate::julia::{sum, sum_by};
+use crate::{AbstractModel, Extension};
 
 /// One list per variable and one entry per collection: first the initial
 /// state, then one entry after each quarter.
@@ -41,238 +41,221 @@ pub struct Data {
     pub real_sector_gva: Vec<Vec<f64>>,
 }
 
-/// The values of one collection.
-struct Entry {
-    collection_time: usize,
-    nominal_gdp: f64,
-    real_gdp: f64,
-    nominal_gva: f64,
-    real_gva: f64,
-    nominal_household_consumption: f64,
-    real_household_consumption: f64,
-    nominal_government_consumption: f64,
-    real_government_consumption: f64,
-    nominal_capitalformation: f64,
-    real_capitalformation: f64,
-    nominal_fixed_capitalformation: f64,
-    real_fixed_capitalformation: f64,
-    nominal_fixed_capitalformation_dwellings: f64,
-    real_fixed_capitalformation_dwellings: f64,
-    nominal_exports: f64,
-    real_exports: f64,
-    nominal_imports: f64,
-    real_imports: f64,
-    operating_surplus: f64,
-    compensation_employees: f64,
-    wages: f64,
-    taxes_production: f64,
-    gdp_deflator_growth_ea: f64,
-    real_gdp_ea: f64,
-    euribor: f64,
-    nominal_sector_gva: Vec<f64>,
-    real_sector_gva: Vec<f64>,
-}
-
-impl Data {
-    fn push(&mut self, e: Entry) {
-        self.collection_time.push(e.collection_time);
-        self.nominal_gdp.push(e.nominal_gdp);
-        self.real_gdp.push(e.real_gdp);
-        self.nominal_gva.push(e.nominal_gva);
-        self.real_gva.push(e.real_gva);
-        self.nominal_household_consumption
-            .push(e.nominal_household_consumption);
-        self.real_household_consumption
-            .push(e.real_household_consumption);
-        self.nominal_government_consumption
-            .push(e.nominal_government_consumption);
-        self.real_government_consumption
-            .push(e.real_government_consumption);
-        self.nominal_capitalformation
-            .push(e.nominal_capitalformation);
-        self.real_capitalformation.push(e.real_capitalformation);
-        self.nominal_fixed_capitalformation
-            .push(e.nominal_fixed_capitalformation);
-        self.real_fixed_capitalformation
-            .push(e.real_fixed_capitalformation);
-        self.nominal_fixed_capitalformation_dwellings
-            .push(e.nominal_fixed_capitalformation_dwellings);
-        self.real_fixed_capitalformation_dwellings
-            .push(e.real_fixed_capitalformation_dwellings);
-        self.nominal_exports.push(e.nominal_exports);
-        self.real_exports.push(e.real_exports);
-        self.nominal_imports.push(e.nominal_imports);
-        self.real_imports.push(e.real_imports);
-        self.operating_surplus.push(e.operating_surplus);
-        self.compensation_employees.push(e.compensation_employees);
-        self.wages.push(e.wages);
-        self.taxes_production.push(e.taxes_production);
-        self.gdp_deflator_growth_ea.push(e.gdp_deflator_growth_ea);
-        self.real_gdp_ea.push(e.real_gdp_ea);
-        self.euribor.push(e.euribor);
-        self.nominal_sector_gva.push(e.nominal_sector_gva);
-        self.real_sector_gva.push(e.real_sector_gva);
+/// `collect_data!(m)`: appends the values of the current state; the first
+/// call records the initial state. As in the Julia code, it calls
+/// `allocate_new_data!` and then `update_data_init!` or
+/// `update_data_step!` through the model type.
+pub fn collect_data<X: Extension>(m: &mut AbstractModel<X>) {
+    X::allocate_new_data(m);
+    let t = m.data.collection_time.len();
+    if t == 1 {
+        X::update_data_init(m);
+    } else {
+        X::update_data_step(m);
     }
 }
 
-impl Model {
-    /// `collect_data!`: appends the values of the current state; the first
-    /// call records the initial state.
+/// `allocate_new_data!`: appends a 0 to every series and a list of zeros to
+/// the series per sector.
+pub fn allocate_new_data<X: Extension>(m: &mut AbstractModel<X>) {
+    let d = &mut m.data;
+    d.collection_time.push(0);
+    for series in [
+        &mut d.nominal_gdp,
+        &mut d.real_gdp,
+        &mut d.nominal_gva,
+        &mut d.real_gva,
+        &mut d.nominal_household_consumption,
+        &mut d.real_household_consumption,
+        &mut d.nominal_government_consumption,
+        &mut d.real_government_consumption,
+        &mut d.nominal_capitalformation,
+        &mut d.real_capitalformation,
+        &mut d.nominal_fixed_capitalformation,
+        &mut d.real_fixed_capitalformation,
+        &mut d.nominal_fixed_capitalformation_dwellings,
+        &mut d.real_fixed_capitalformation_dwellings,
+        &mut d.nominal_exports,
+        &mut d.real_exports,
+        &mut d.nominal_imports,
+        &mut d.real_imports,
+        &mut d.operating_surplus,
+        &mut d.compensation_employees,
+        &mut d.wages,
+        &mut d.taxes_production,
+        &mut d.gdp_deflator_growth_ea,
+        &mut d.real_gdp_ea,
+        &mut d.euribor,
+    ] {
+        series.push(0.0);
+    }
+    d.nominal_sector_gva.push(vec![0.0; m.prop.G]);
+    d.real_sector_gva.push(vec![0.0; m.prop.G]);
+}
+
+/// Sum of `f(i)` over the firms of each sector.
+fn by_sector<X>(m: &AbstractModel<X>, f: impl Fn(usize) -> f64) -> Vec<f64> {
+    let sectors = m.firms.by_sector(m.prop.G);
+    sectors
+        .iter()
+        .map(|firms| sum_by(firms.len(), |k| f(firms[k])))
+        .collect()
+}
+
+/// `update_data_init!`: the initial state, at prices of 1, in the first
+/// entry.
+pub fn update_data_init<X: Extension>(m: &mut AbstractModel<X>) {
+    let (p, f) = (&m.prop, &m.firms);
+    let I = f.len();
+    let tot_Y_h = sum(&m.w_act.Y_h) + sum(&m.w_inact.Y_h) + sum(&f.Y_h) + m.bank.Y_h;
+    let (C_G, C_E) = (m.gov.C_G, m.rotw.C_E);
+    let gva = |i: usize| f.Y_i[i] * ((1.0 - f.tau_Y_i[i]) - 1.0 / f.beta_i[i]);
+    let sector_gva = by_sector(m, gva);
+    let nominal_gdp = sum_by(I, |i| f.Y_i[i] * (1.0 - 1.0 / f.beta_i[i]))
+        + tot_Y_h * p.psi / (1.0 / p.tau_VAT + 1.0)
+        + p.tau_G * C_G
+        + tot_Y_h * p.psi_H / (1.0 / p.tau_CF + 1.0)
+        + p.tau_EXPORT * C_E;
+    let nominal_gva = sum_by(I, gva);
+    let capitalformation =
+        sum_by(I, |i| f.Y_i[i] * f.delta_i[i] / f.kappa_i[i]) + tot_Y_h * p.psi_H;
+    let operating_surplus = sum_by(I, |i| {
+        f.Y_i[i] * (1.0 - ((1.0 + p.tau_SIF) * f.w_bar_i[i] / f.alpha_bar_i[i] + 1.0 / f.beta_i[i]))
+            - f.tau_K_i[i] * f.Y_i[i]
+            - f.tau_Y_i[i] * f.Y_i[i]
+    });
+    let wages = sum_by(I, |i| f.w_bar_i[i] * f.N_i[i] as f64);
+    let taxes_production = sum_by(I, |i| f.tau_K_i[i] * f.Y_i[i]);
+    let (pi_EA, Y_EA, Y_I, r_bar) = (m.rotw.pi_EA, m.rotw.Y_EA, m.rotw.Y_I, m.cb.r_bar);
+    let (psi, psi_H, tau_G, tau_SIF, tau_EXPORT) =
+        (p.psi, p.psi_H, p.tau_G, p.tau_SIF, p.tau_EXPORT);
+
+    let d = &mut m.data;
+    d.nominal_gdp[0] = nominal_gdp;
+    d.real_gdp[0] = d.nominal_gdp[0];
+    d.nominal_gva[0] = nominal_gva;
+    d.real_gva[0] = d.nominal_gva[0];
+    d.nominal_household_consumption[0] = tot_Y_h * psi;
+    d.real_household_consumption[0] = d.nominal_household_consumption[0];
+    d.nominal_government_consumption[0] = (1.0 + tau_G) * C_G;
+    d.real_government_consumption[0] = d.nominal_government_consumption[0];
+    d.nominal_capitalformation[0] = capitalformation;
+    d.real_capitalformation[0] = d.nominal_capitalformation[0];
+    d.nominal_fixed_capitalformation[0] = d.nominal_capitalformation[0];
+    d.real_fixed_capitalformation[0] = d.nominal_capitalformation[0];
+    d.nominal_fixed_capitalformation_dwellings[0] = tot_Y_h * psi_H;
+    d.real_fixed_capitalformation_dwellings[0] = d.nominal_fixed_capitalformation_dwellings[0];
+    d.nominal_exports[0] = (1.0 + tau_EXPORT) * C_E;
+    d.real_exports[0] = d.nominal_exports[0];
+    d.nominal_imports[0] = Y_I;
+    d.real_imports[0] = d.nominal_imports[0];
+    d.operating_surplus[0] = operating_surplus;
+    d.compensation_employees[0] = (1.0 + tau_SIF) * wages;
+    d.wages[0] = wages;
+    d.taxes_production[0] = taxes_production;
+    d.nominal_sector_gva[0].copy_from_slice(&sector_gva);
+    d.real_sector_gva[0].copy_from_slice(&sector_gva);
+    d.euribor[0] = r_bar;
+    d.gdp_deflator_growth_ea[0] = pi_EA;
+    d.real_gdp_ea[0] = Y_EA;
+    d.collection_time[0] = 1;
+}
+
+/// `update_data_step!`: the values after a quarter, in the last entry.
+pub fn update_data_step<X: Extension>(m: &mut AbstractModel<X>) {
+    let (p, f, agg) = (&m.prop, &m.firms, &m.agg);
+    let (gov, rotw) = (&m.gov, &m.rotw);
+    let I = f.len();
+    let tot_C_h = sum(&m.w_act.C_h) + sum(&m.w_inact.C_h) + sum(&f.C_h) + m.bank.C_h;
+    let tot_I_h = sum(&m.w_act.I_h) + sum(&m.w_inact.I_h) + sum(&f.I_h) + m.bank.I_h;
+    let sales_net = |i: usize| (1.0 - f.tau_Y_i[i]) * f.P_i[i] * f.Y_i[i];
+    let materials = |i: usize| 1.0 / f.beta_i[i] * f.P_bar_i[i] * f.Y_i[i];
+    let real_gva_i = |i: usize| f.Y_i[i] * ((1.0 - f.tau_Y_i[i]) - 1.0 / f.beta_i[i]);
+    let nominal_gdp = sum_by(I, |i| f.tau_Y_i[i] * f.Y_i[i] * f.P_i[i])
+        + p.tau_VAT * tot_C_h
+        + p.tau_CF * tot_I_h
+        + p.tau_G * gov.C_j
+        + p.tau_EXPORT * rotw.C_l
+        + sum_by(I, sales_net)
+        - sum_by(I, materials);
+    let real_gdp = sum_by(I, real_gva_i)
+        + sum_by(I, |i| f.tau_Y_i[i] * f.Y_i[i])
+        + p.tau_VAT * tot_C_h / agg.P_bar_h
+        + p.tau_CF * tot_I_h / agg.P_bar_CF_h
+        + p.tau_G * gov.C_j / gov.P_j
+        + p.tau_EXPORT * rotw.C_l / rotw.P_l;
+    let nominal_gva = sum_by(I, sales_net) - sum_by(I, materials);
+    let real_gva = sum_by(I, real_gva_i);
+    let nominal_capitalformation = sum_by(I, |i| f.P_CF_i[i] * f.I_i[i])
+        + (1.0 + p.tau_CF) * tot_I_h
+        + sum_by(I, |i| f.DS_i[i] * f.P_i[i])
+        + sum_by(I, |i| f.DM_i[i] * f.P_bar_i[i] - materials(i));
+    let real_capitalformation = sum(&f.I_i)
+        + (1.0 + p.tau_CF) * tot_I_h / agg.P_bar_CF_h
+        + sum_by(I, |i| f.DM_i[i] - f.Y_i[i] / f.beta_i[i])
+        + sum(&f.DS_i);
+    let nominal_fixed_capitalformation =
+        sum_by(I, |i| f.P_CF_i[i] * f.I_i[i]) + (1.0 + p.tau_CF) * tot_I_h;
+    let real_fixed_capitalformation = sum(&f.I_i) + (1.0 + p.tau_CF) * tot_I_h / agg.P_bar_CF_h;
+    let operating_surplus = sum_by(I, |i| {
+        f.P_i[i] * f.Q_i[i] + f.P_i[i] * f.DS_i[i]
+            - (1.0 + p.tau_SIF) * f.w_i[i] * f.N_i[i] as f64 * agg.P_bar_HH
+            - materials(i)
+            - f.tau_Y_i[i] * f.P_i[i] * f.Y_i[i]
+            - f.tau_K_i[i] * f.P_i[i] * f.Y_i[i]
+    });
+    let compensation_employees =
+        (1.0 + p.tau_SIF) * sum_by(I, |i| f.w_i[i] * f.N_i[i] as f64) * agg.P_bar_HH;
+    let wages = sum_by(I, |i| f.w_i[i] * f.N_i[i] as f64) * agg.P_bar_HH;
+    let taxes_production = sum_by(I, |i| f.tau_K_i[i] * f.Y_i[i] * f.P_i[i]);
+    let nominal_sector_gva: Vec<f64> = by_sector(m, sales_net)
+        .iter()
+        .zip(by_sector(m, materials))
+        .map(|(a, b)| a - b)
+        .collect();
+    let real_sector_gva = by_sector(m, real_gva_i);
+    let nominal_imports = sum_by(rotw.P_m.len(), |g| rotw.P_m[g] * rotw.Q_m[g]);
+    let real_imports = sum(&rotw.Q_m);
+    let (tau_VAT, tau_G, tau_CF, tau_EXPORT) = (p.tau_VAT, p.tau_G, p.tau_CF, p.tau_EXPORT);
+    let (P_bar_h, P_bar_CF_h, t_now) = (agg.P_bar_h, agg.P_bar_CF_h, agg.t);
+    let (C_j, P_j, C_l, P_l) = (gov.C_j, gov.P_j, rotw.C_l, rotw.P_l);
+    let (pi_EA, Y_EA, r_bar) = (rotw.pi_EA, rotw.Y_EA, m.cb.r_bar);
+
+    let d = &mut m.data;
+    let t = d.collection_time.len() - 1;
+    d.nominal_gdp[t] = nominal_gdp;
+    d.real_gdp[t] = real_gdp;
+    d.nominal_gva[t] = nominal_gva;
+    d.real_gva[t] = real_gva;
+    d.nominal_household_consumption[t] = (1.0 + tau_VAT) * tot_C_h;
+    d.real_household_consumption[t] = (1.0 + tau_VAT) * tot_C_h / P_bar_h;
+    d.nominal_government_consumption[t] = (1.0 + tau_G) * C_j;
+    d.real_government_consumption[t] = (1.0 + tau_G) * C_j / P_j;
+    d.nominal_capitalformation[t] = nominal_capitalformation;
+    d.real_capitalformation[t] = real_capitalformation;
+    d.nominal_fixed_capitalformation[t] = nominal_fixed_capitalformation;
+    d.real_fixed_capitalformation[t] = real_fixed_capitalformation;
+    d.nominal_fixed_capitalformation_dwellings[t] = (1.0 + tau_CF) * tot_I_h;
+    d.real_fixed_capitalformation_dwellings[t] = (1.0 + tau_CF) * tot_I_h / P_bar_CF_h;
+    d.nominal_exports[t] = (1.0 + tau_EXPORT) * C_l;
+    d.real_exports[t] = (1.0 + tau_EXPORT) * C_l / P_l;
+    d.nominal_imports[t] = nominal_imports;
+    d.real_imports[t] = real_imports;
+    d.operating_surplus[t] = operating_surplus;
+    d.compensation_employees[t] = compensation_employees;
+    d.wages[t] = wages;
+    d.taxes_production[t] = taxes_production;
+    d.nominal_sector_gva[t].copy_from_slice(&nominal_sector_gva);
+    d.real_sector_gva[t].copy_from_slice(&real_sector_gva);
+    d.euribor[t] = r_bar;
+    d.gdp_deflator_growth_ea[t] = pi_EA;
+    d.real_gdp_ea[t] = Y_EA;
+    d.collection_time[t] = t_now;
+}
+
+impl<X: Extension> AbstractModel<X> {
+    /// `collect_data!(model)`; see [`crate::base::collect_data`].
     pub fn collect_data(&mut self) {
-        let e = if self.data.collection_time.is_empty() {
-            self.data_init()
-        } else {
-            self.data_step()
-        };
-        self.data.push(e);
-    }
-
-    /// Sum of `f(i)` over the firms of each sector.
-    fn by_sector(&self, f: impl Fn(usize) -> f64) -> Vec<f64> {
-        let sectors = self.firms.by_sector(self.prop.G);
-        sectors
-            .iter()
-            .map(|firms| sum_by(firms.len(), |k| f(firms[k])))
-            .collect()
-    }
-
-    /// `update_data_init!`: the initial state, at prices of 1.
-    fn data_init(&self) -> Entry {
-        let (p, f) = (&self.prop, &self.firms);
-        let I = f.len();
-        let tot_Y_h = sum(&self.w_act.Y_h) + sum(&self.w_inact.Y_h) + sum(&f.Y_h) + self.bank.Y_h;
-        let (C_G, C_E) = (self.gov.C_G, self.rotw.C_E);
-        let nominal_gdp = sum_by(I, |i| f.Y_i[i] * (1.0 - 1.0 / f.beta_i[i]))
-            + tot_Y_h * p.psi / (1.0 / p.tau_VAT + 1.0)
-            + p.tau_G * C_G
-            + tot_Y_h * p.psi_H / (1.0 / p.tau_CF + 1.0)
-            + p.tau_EXPORT * C_E;
-        let gva = |i: usize| f.Y_i[i] * ((1.0 - f.tau_Y_i[i]) - 1.0 / f.beta_i[i]);
-        let nominal_gva = sum_by(I, gva);
-        let household_consumption = tot_Y_h * p.psi;
-        let government_consumption = (1.0 + p.tau_G) * C_G;
-        let dwellings = tot_Y_h * p.psi_H;
-        let capitalformation =
-            sum_by(I, |i| f.Y_i[i] * f.delta_i[i] / f.kappa_i[i]) + tot_Y_h * p.psi_H;
-        let exports = (1.0 + p.tau_EXPORT) * C_E;
-        let imports = self.rotw.Y_I;
-        let operating_surplus = sum_by(I, |i| {
-            f.Y_i[i]
-                * (1.0 - ((1.0 + p.tau_SIF) * f.w_bar_i[i] / f.alpha_bar_i[i] + 1.0 / f.beta_i[i]))
-                - f.tau_K_i[i] * f.Y_i[i]
-                - f.tau_Y_i[i] * f.Y_i[i]
-        });
-        let wages = sum_by(I, |i| f.w_bar_i[i] * f.N_i[i] as f64);
-        let sector_gva = self.by_sector(gva);
-        Entry {
-            collection_time: 1,
-            nominal_gdp,
-            real_gdp: nominal_gdp,
-            nominal_gva,
-            real_gva: nominal_gva,
-            nominal_household_consumption: household_consumption,
-            real_household_consumption: household_consumption,
-            nominal_government_consumption: government_consumption,
-            real_government_consumption: government_consumption,
-            nominal_capitalformation: capitalformation,
-            real_capitalformation: capitalformation,
-            nominal_fixed_capitalformation: capitalformation,
-            real_fixed_capitalformation: capitalformation,
-            nominal_fixed_capitalformation_dwellings: dwellings,
-            real_fixed_capitalformation_dwellings: dwellings,
-            nominal_exports: exports,
-            real_exports: exports,
-            nominal_imports: imports,
-            real_imports: imports,
-            operating_surplus,
-            compensation_employees: (1.0 + p.tau_SIF) * wages,
-            wages,
-            taxes_production: sum_by(I, |i| f.tau_K_i[i] * f.Y_i[i]),
-            gdp_deflator_growth_ea: self.rotw.pi_EA,
-            real_gdp_ea: self.rotw.Y_EA,
-            euribor: self.cb.r_bar,
-            nominal_sector_gva: sector_gva.clone(),
-            real_sector_gva: sector_gva,
-        }
-    }
-
-    /// `update_data_step!`: the values after a quarter.
-    fn data_step(&self) -> Entry {
-        let (p, f, agg) = (&self.prop, &self.firms, &self.agg);
-        let (gov, rotw) = (&self.gov, &self.rotw);
-        let I = f.len();
-        let tot_C_h = sum(&self.w_act.C_h) + sum(&self.w_inact.C_h) + sum(&f.C_h) + self.bank.C_h;
-        let tot_I_h = sum(&self.w_act.I_h) + sum(&self.w_inact.I_h) + sum(&f.I_h) + self.bank.I_h;
-        let sales_net = |i: usize| (1.0 - f.tau_Y_i[i]) * f.P_i[i] * f.Y_i[i];
-        let materials = |i: usize| 1.0 / f.beta_i[i] * f.P_bar_i[i] * f.Y_i[i];
-        let real_gva_i = |i: usize| f.Y_i[i] * ((1.0 - f.tau_Y_i[i]) - 1.0 / f.beta_i[i]);
-        let nominal_gva = sum_by(I, sales_net) - sum_by(I, materials);
-        let real_gva = sum_by(I, real_gva_i);
-        let nominal_gdp = sum_by(I, |i| f.tau_Y_i[i] * f.Y_i[i] * f.P_i[i])
-            + p.tau_VAT * tot_C_h
-            + p.tau_CF * tot_I_h
-            + p.tau_G * gov.C_j
-            + p.tau_EXPORT * rotw.C_l
-            + sum_by(I, sales_net)
-            - sum_by(I, materials);
-        let real_gdp = real_gva
-            + sum_by(I, |i| f.tau_Y_i[i] * f.Y_i[i])
-            + p.tau_VAT * tot_C_h / agg.P_bar_h
-            + p.tau_CF * tot_I_h / agg.P_bar_CF_h
-            + p.tau_G * gov.C_j / gov.P_j
-            + p.tau_EXPORT * rotw.C_l / rotw.P_l;
-        let investment_nominal = sum_by(I, |i| f.P_CF_i[i] * f.I_i[i]);
-        let investment_real = sum(&f.I_i);
-        let dwellings = (1.0 + p.tau_CF) * tot_I_h;
-        let wages = sum_by(I, |i| f.w_i[i] * f.N_i[i] as f64) * agg.P_bar_HH;
-        Entry {
-            collection_time: agg.t,
-            nominal_gdp,
-            real_gdp,
-            nominal_gva,
-            real_gva,
-            nominal_household_consumption: (1.0 + p.tau_VAT) * tot_C_h,
-            real_household_consumption: (1.0 + p.tau_VAT) * tot_C_h / agg.P_bar_h,
-            nominal_government_consumption: (1.0 + p.tau_G) * gov.C_j,
-            real_government_consumption: (1.0 + p.tau_G) * gov.C_j / gov.P_j,
-            nominal_capitalformation: investment_nominal
-                + dwellings
-                + sum_by(I, |i| f.DS_i[i] * f.P_i[i])
-                + sum_by(I, |i| f.DM_i[i] * f.P_bar_i[i] - materials(i)),
-            real_capitalformation: investment_real
-                + dwellings / agg.P_bar_CF_h
-                + sum_by(I, |i| f.DM_i[i] - f.Y_i[i] / f.beta_i[i])
-                + sum(&f.DS_i),
-            nominal_fixed_capitalformation: investment_nominal + dwellings,
-            real_fixed_capitalformation: investment_real + dwellings / agg.P_bar_CF_h,
-            nominal_fixed_capitalformation_dwellings: dwellings,
-            real_fixed_capitalformation_dwellings: dwellings / agg.P_bar_CF_h,
-            nominal_exports: (1.0 + p.tau_EXPORT) * rotw.C_l,
-            real_exports: (1.0 + p.tau_EXPORT) * rotw.C_l / rotw.P_l,
-            nominal_imports: sum_by(rotw.P_m.len(), |g| rotw.P_m[g] * rotw.Q_m[g]),
-            real_imports: sum(&rotw.Q_m),
-            operating_surplus: sum_by(I, |i| {
-                f.P_i[i] * f.Q_i[i] + f.P_i[i] * f.DS_i[i]
-                    - (1.0 + p.tau_SIF) * f.w_i[i] * f.N_i[i] as f64 * agg.P_bar_HH
-                    - materials(i)
-                    - f.tau_Y_i[i] * f.P_i[i] * f.Y_i[i]
-                    - f.tau_K_i[i] * f.P_i[i] * f.Y_i[i]
-            }),
-            compensation_employees: (1.0 + p.tau_SIF)
-                * sum_by(I, |i| f.w_i[i] * f.N_i[i] as f64)
-                * agg.P_bar_HH,
-            wages,
-            taxes_production: sum_by(I, |i| f.tau_K_i[i] * f.Y_i[i] * f.P_i[i]),
-            gdp_deflator_growth_ea: rotw.pi_EA,
-            real_gdp_ea: rotw.Y_EA,
-            euribor: self.cb.r_bar,
-            nominal_sector_gva: self
-                .by_sector(sales_net)
-                .iter()
-                .zip(self.by_sector(materials))
-                .map(|(a, b)| a - b)
-                .collect(),
-            real_sector_gva: self.by_sector(real_gva_i),
-        }
+        X::collect_data(self)
     }
 }

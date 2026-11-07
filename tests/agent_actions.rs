@@ -60,17 +60,12 @@ fn bank_deposits() {
 /// `test taylor_rule`: the policy rate does not fall below 0.
 #[test]
 fn taylor_rule() {
-    let mut m = model();
-    let cb = &mut m.cb;
-    (
-        cb.rho,
-        cb.r_bar,
-        cb.r_star,
-        cb.pi_star,
-        cb.xi_pi,
-        cb.xi_gamma,
-    ) = (1.0, -0.1, 0.1, 0.1, 0.5, 0.5);
-    check("r_bar", cb.taylor_rule(0.1, 0.1), 0.0, 0.0, 1e-10);
+    let (rho, r_bar, r_star, pi_star, xi_pi, xi_gamma) = (1.0, -0.1, 0.1, 0.1, 0.5, 0.5);
+    let (gamma_EA, pi_EA) = (0.1, 0.1);
+    let rate = beforeit::taylor_rule(
+        rho, r_bar, r_star, pi_star, xi_pi, xi_gamma, gamma_EA, pi_EA,
+    );
+    check("r_bar", rate, 0.0, 0.0, 1e-10);
 }
 
 /// `test inflation_priceindex`: prices weighted by production. The price

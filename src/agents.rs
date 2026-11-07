@@ -6,6 +6,56 @@ use crate::julia::{round_int, sum};
 use crate::params::{InitialConditions, Parameters};
 use crate::random::Randomness;
 
+/// A group of households: the fields of BeforeIT's agent types that
+/// `households_deposits(households, r, model)` reads. [`Workers`], [`Firms`]
+/// (their owners) and [`Bank`] (its owner) are households.
+pub trait Households {
+    /// Deposits.
+    fn D_h(&self) -> &[f64];
+    /// Disposable income.
+    fn Y_h(&self) -> &[f64];
+    /// Realised consumption.
+    fn C_h(&self) -> &[f64];
+    /// Realised investment.
+    fn I_h(&self) -> &[f64];
+}
+
+macro_rules! households {
+    ($t:ty) => {
+        impl Households for $t {
+            fn D_h(&self) -> &[f64] {
+                &self.D_h
+            }
+            fn Y_h(&self) -> &[f64] {
+                &self.Y_h
+            }
+            fn C_h(&self) -> &[f64] {
+                &self.C_h
+            }
+            fn I_h(&self) -> &[f64] {
+                &self.I_h
+            }
+        }
+    };
+}
+households!(Workers);
+households!(Firms);
+
+impl Households for Bank {
+    fn D_h(&self) -> &[f64] {
+        std::slice::from_ref(&self.D_h)
+    }
+    fn Y_h(&self) -> &[f64] {
+        std::slice::from_ref(&self.Y_h)
+    }
+    fn C_h(&self) -> &[f64] {
+        std::slice::from_ref(&self.C_h)
+    }
+    fn I_h(&self) -> &[f64] {
+        std::slice::from_ref(&self.I_h)
+    }
+}
+
 /// Persons: the workers (`w_act`, employed and unemployed) or the
 /// economically inactive persons (`w_inact`), BeforeIT `Workers`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -42,7 +92,7 @@ impl Workers {
 
     /// `Workers(parameters, initial_conditions)`: all workers start
     /// unemployed; the inactive persons receive their social benefits.
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> (Workers, Workers) {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> (Workers, Workers) {
         let I: usize = p.I_s.iter().sum();
         let H_W = p.H_act - I - 1;
         let w_act = Workers {
@@ -175,7 +225,7 @@ impl Firms {
     }
 
     /// `Firms(parameters, initial_conditions)` (online appendix E.1).
-    pub(crate) fn new<R: Randomness + ?Sized>(
+    pub fn new<R: Randomness + ?Sized>(
         p: &Parameters,
         ic: &InitialConditions,
         rng: &mut R,
@@ -311,7 +361,7 @@ pub struct Bank {
 impl Bank {
     /// `Banks(parameters, initial_conditions)` with one bank. Profit,
     /// reserves and the owner household are set in [`crate::Model::new`].
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> Bank {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> Bank {
         Bank {
             E_k: ic.E_k,
             r: ic.r_bar + p.mu,
@@ -337,7 +387,7 @@ pub struct CentralBank {
 }
 
 impl CentralBank {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> CentralBank {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> CentralBank {
         CentralBank {
             r_bar: ic.r_bar,
             r_G: p.r_G,
@@ -376,7 +426,7 @@ pub struct Government {
 }
 
 impl Government {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> Government {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> Government {
         Government {
             alpha_G: p.alpha_G,
             beta_G: p.beta_G,
@@ -440,7 +490,7 @@ pub struct RestOfTheWorld {
 }
 
 impl RestOfTheWorld {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> RestOfTheWorld {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> RestOfTheWorld {
         RestOfTheWorld {
             alpha_E: p.alpha_E,
             beta_E: p.beta_E,
@@ -505,7 +555,7 @@ pub struct Aggregates {
 }
 
 impl Aggregates {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> Aggregates {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> Aggregates {
         Aggregates {
             Y: ic.Y.clone(),
             pi_: ic.pi.clone(),

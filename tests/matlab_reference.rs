@@ -266,7 +266,7 @@ fn one_quarter_rule_by_rule() {
     m.set_banks_rate();
     check("r", m.bank.r, 0.028476, 1e-4, 0.0);
 
-    m.set_firms_expectations_and_decisions();
+    m.set_firms_expectations_and_decisions(rng);
     let f = &m.firms;
     check("Q_s_i", mean(&f.Q_s_i), 220.0311, 1e-6, 0.0);
     check("I_d_i", mean(&f.I_d_i), 21.6029, 1e-5, 0.0);
@@ -326,7 +326,7 @@ fn one_quarter_rule_by_rule() {
     check("C_G", m.gov.C_G, 14783.2494, 1e-6, 1e-6);
     check("C_d_j", mean(&m.gov.C_d_j), 95.0572, 1e-6, 1e-6);
 
-    m.set_rotw_import_export();
+    m.set_rotw_import_export(rng);
     check("C_E", m.rotw.C_E, 34246.8702, 1e-6, 1e-6);
     check("C_d_l", mean(&m.rotw.C_d_l), 110.1048, 1e-6, 1e-6);
     check("Y_I", m.rotw.Y_I, 33214.9736, 1e-6, 1e-6);
@@ -381,10 +381,10 @@ fn one_quarter_rule_by_rule() {
     m.set_banks_equity();
     check("E_k", m.bank.E_k, 90742.39, 1e-5, 0.0);
 
-    m.set_households_income_act();
-    m.set_households_income_inact();
-    m.set_households_income_firms();
-    m.set_households_income_banks();
+    m.set_households_income_act(false);
+    m.set_households_income_inact(false);
+    m.set_households_income_firms(false);
+    m.set_households_income_banks(false);
     m.set_households_deposits_act();
     m.set_households_deposits_inact();
     m.set_households_deposits_firms();

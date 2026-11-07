@@ -1,9 +1,9 @@
 //! Credit, labour and goods markets, BeforeIT `src/markets/` (appendix
 //! A.4.1, A.2.1 and A.1.1).
 
-use crate::Model;
 use crate::julia::{max, min, pos, sum, sum_by, zero_to_one};
 use crate::random::{Randomness, WeightVector};
+use crate::{AbstractModel, Extension};
 
 /// Weight of each seller when a buyer picks one, `create_weighted_sampler`:
 /// cheaper and larger sellers are picked more often.
@@ -38,7 +38,7 @@ struct Sellers {
 }
 
 impl Sellers {
-    fn new(m: &Model) -> Sellers {
+    fn new<X>(m: &AbstractModel<X>) -> Sellers {
         let (f, rotw, G) = (&m.firms, &m.rotw, m.prop.G);
         let I = f.len();
         let P_f = f.P_i.iter().chain(&rotw.P_m).copied().collect();
@@ -152,7 +152,7 @@ struct RetailDemand {
 }
 
 impl RetailDemand {
-    fn new(m: &Model) -> RetailDemand {
+    fn new<X>(m: &AbstractModel<X>) -> RetailDemand {
         let (w_act, w_inact, f, b) = (&m.w_act, &m.w_inact, &m.firms, &m.bank);
         let C_d_h = w_act
             .C_d_h
@@ -182,14 +182,17 @@ impl RetailDemand {
     }
 }
 
-impl Model {
-    /// `search_and_matching_credit!` (A.62 to A.64): firms that want new
-    /// loans are served in random order, limited by the loan-to-value ratio
-    /// and by the bank's equity relative to all expected loans.
-    pub fn search_and_matching_credit<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
-        let (zeta, zeta_LTV) = (self.prop.zeta, self.prop.zeta_LTV);
-        let E_k = self.bank.E_k;
-        let f = &mut self.firms;
+/// `search_and_matching_credit!` (A.62 to A.64): firms that want new loans
+/// are served in random order, limited by the loan-to-value ratio and by the
+/// bank's equity relative to all expected loans.
+pub fn search_and_matching_credit<X: Extension, R: Randomness + ?Sized>(
+    m: &mut AbstractModel<X>,
+    rng: &mut R,
+) {
+    {
+        let (zeta, zeta_LTV) = (m.prop.zeta, m.prop.zeta_LTV);
+        let E_k = m.bank.E_k;
+        let f = &mut m.firms;
         let mut ids: Vec<usize> = (0..f.len()).filter(|&i| f.DL_d_i[i] > 0.0).collect();
         // From left to right, as Julia's `sum` with `init`.
         let exposure: f64 = f.L_e_i.iter().sum();
@@ -208,14 +211,19 @@ impl Model {
         }
         f.DL_i = DL_i;
     }
+}
 
-    /// `search_and_matching_labour!` (A.23, A.24): firms with too many
-    /// employees dismiss randomly chosen ones; then firms with vacancies, in
-    /// random order, hire one unemployed person each per round until the
-    /// vacancies or the unemployed run out.
-    pub fn search_and_matching_labour<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
-        let f = &mut self.firms;
-        let O_h = &mut self.w_act.O_h;
+/// `search_and_matching_labour!` (A.23, A.24): firms with too many employees
+/// dismiss randomly chosen ones; then firms with vacancies, in random order,
+/// hire one unemployed person each per round until the vacancies or the
+/// unemployed run out.
+pub fn search_and_matching_labour<X: Extension, R: Randomness + ?Sized>(
+    m: &mut AbstractModel<X>,
+    rng: &mut R,
+) {
+    {
+        let f = &mut m.firms;
+        let O_h = &mut m.w_act.O_h;
         let mut V_i: Vec<i64> = (0..f.len()).map(|i| f.N_d_i[i] - f.N_i[i]).collect();
 
         let mut H_E: Vec<usize> = (0..O_h.len()).filter(|&h| O_h[h].is_some()).collect();
@@ -248,14 +256,42 @@ impl Model {
             I_V.retain(|&i| V_i[i] > 0);
         }
     }
+}
 
-    /// `search_and_matching!` (appendix A.1.1, and A.1, A.2, A.15, A.16,
-    /// A.19, A.20, A.47, A.48, A.50, A.51, A.57, A.58, A.79, A.80, A.83,
-    /// A.84): for each product, first the firms market for intermediate
-    /// inputs and investment goods, then the retail market for households,
-    /// government and foreign consumers. Buyers come in random order and pick
-    /// sellers by price and size.
+/// `search_and_matching!` (appendix A.1.1, and A.1, A.2, A.15, A.16, A.19,
+/// A.20, A.47, A.48, A.50, A.51, A.57, A.58, A.79, A.80, A.83, A.84): for
+/// each product, first the firms market for intermediate inputs and
+/// investment goods, then the retail market for households, government and
+/// foreign consumers. Buyers come in random order and pick sellers by price
+/// and size.
+pub fn search_and_matching<X: Extension, R: Randomness + ?Sized>(
+    m: &mut AbstractModel<X>,
+    rng: &mut R,
+) {
+    m.goods_markets(rng);
+}
+
+impl<X: Extension> AbstractModel<X> {
+    /// `search_and_matching_credit!(model)`; see
+    /// [`crate::base::search_and_matching_credit`].
+    pub fn search_and_matching_credit<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
+        X::search_and_matching_credit(self, rng)
+    }
+
+    /// `search_and_matching_labour!(model)`; see
+    /// [`crate::base::search_and_matching_labour`].
+    pub fn search_and_matching_labour<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
+        X::search_and_matching_labour(self, rng)
+    }
+
+    /// `search_and_matching!(model)`; see
+    /// [`crate::base::search_and_matching`].
     pub fn search_and_matching<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
+        X::search_and_matching(self, rng)
+    }
+
+    /// The body of `search_and_matching!`.
+    fn goods_markets<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
         let sellers = Sellers::new(self);
         let demand = RetailDemand::new(self);
         let (G, I, H) = (self.prop.G, self.firms.len(), demand.C_d_h.len());
