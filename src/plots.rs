@@ -839,6 +839,19 @@ pub fn plot_data_vectors<X>(
         .iter()
         .map(|m| DataVector::from_models(m))
         .collect();
+    plot_data_vectors_from(&data_vectors, titlefont, quantities)
+}
+
+/// [`plot_data_vectors`] from the data of the runs, which may come from
+/// models of different types, as a Julia vector of model vectors may mix
+/// them.
+///
+/// Returns the errors of [`plot_data_vectors`].
+pub fn plot_data_vectors_from(
+    data_vectors: &[DataVector],
+    titlefont: u32,
+    quantities: &[&str],
+) -> Result<Vec<Plot>, String> {
     let time_length = data_vectors
         .first()
         .and_then(|dv| dv.iter().next())
@@ -850,7 +863,7 @@ pub fn plot_data_vectors<X>(
         let mut p = Plot::new(get_plot_title(quantity));
         p.title_font = titlefont;
         p.legend = Legend::None;
-        for dv in &data_vectors {
+        for dv in data_vectors {
             let data = compute_quantity_data(dv, quantity)?;
             p.add_errorline(steps(1, time_length), data, ErrorType::Std)?;
         }

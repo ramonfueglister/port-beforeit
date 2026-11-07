@@ -311,8 +311,9 @@ With the feature `plots`, the module `plots` has the functions of BeforeIT's
 package extension for Plots.jl: `plot_data` draws the series of one model,
 `plot_data_vector` the mean over several runs with a band of one standard
 deviation (StatsPlots' `errorline`), `plot_data_vectors` several such
-ensembles in one plot, and `plot_model_vs_real` predictions against the
-data. They return `Plot` values with the series, colours, titles, limits
+ensembles in one plot (`plot_data_vectors_from` takes their data, so that
+they may come from models of different types), and `plot_model_vs_real`
+predictions against the data. They return `Plot` values with the series, colours, titles, limits
 and ticks that BeforeIT.jl hands to Plots.jl; `layout_svg` and
 `Plot::to_svg` draw them as SVG. For the plots of BeforeIT's examples,
 `Plot::new` starts an empty plot with Plots.jl's defaults, to which
@@ -322,6 +323,52 @@ make heatmaps and bar plots, and `layout_svg_with_title` puts a title over
 a layout.
 
 `cargo doc --open` shows the documentation of every type and rule.
+
+## Examples
+
+The folder `examples/` has the examples of BeforeIT.jl's `examples/`, one
+Rust file for each Julia file, with its name in lower case. The examples
+with plots need the feature `plots` and write SVG files to
+`target/example-output/<example>`:
+
+```sh
+cargo run --release --features plots --example basic_example
+```
+
+| Rust | BeforeIT.jl | Notes |
+|---|---|---|
+| `austria` | the example in the README | prints real GDP |
+| `basic_example` | `basic_example.jl` | the field names that Julia lists with `fieldnames` are printed from a fixed list |
+| `basic_example_multibank` | `basic_example_multibank.jl` | |
+| `basic_inheritance` | `basic_inheritance.jl` | each model has its own agents (see below) |
+| `change_expectations` | `change_expectations.jl` | the second model is of a model type with the new rule (see below) |
+| `scenario_analysis_via_overload` | `scenario_analysis_via_overload.jl` | the shocked runs are of a model type with the new rule (see below) |
+| `scenario_analysis_via_shock` | `scenario_analysis_via_shock.jl` | |
+| `single_agents` | `single_agents.jl` | IDs count from 0; a consumer loan holds the ID of its debtor, where Julia holds the agent |
+| `multithreading_speedup` | `multithreading_speedup.jl` | no first run to compile, which Rust does ahead of time |
+| `canvas_extension` | `CANVAS_extension.jl` | each model has its own agents (see below) |
+| `conditional_forecasts` | `Conditional_forecasts.jl` | each model has its own agents (see below) |
+
+A model type of BeforeIT.jl (`Bit.@object struct NewModel(Bit.Model)`) with
+its own methods is a type that implements `Extension`, and the fields that
+its agent types add are fields of that type. Where a Julia example redefines
+a method for `Bit.Model`, which changes the rule for every model from then
+on, the Rust example uses a model type with the new rule for the models
+that follow it.
+
+`basic_inheritance.jl`, `CANVAS_extension.jl` and
+`Conditional_forecasts.jl` build several models from the same agent
+objects. Each constructor then works on the state the previous one left: it
+collects the first data point again and divides the deposits and capital
+of the firm owners and the inactive households by the total income once
+more. In the last two examples the models also share one state while they
+run. In the Rust examples each model has its own copy of the agents.
+
+The Julia examples above draw their random numbers from Julia's global
+generator, `change_expectations.jl` with the seed 1234 and the others
+without a seed. The Rust examples seed `Xoshiro` with 1, or with 1234
+where Julia does, so each run gives the same numbers; they are not those
+of a Julia run, whose generator differs.
 
 ## Randomness and reproducibility
 
@@ -647,6 +694,10 @@ for byte. CI checks the formatting and runs `cargo clippy` (with and without the
 feature `plots`) and the tests with all features on stable Rust, and the
 tests with all features on Rust 1.88.
 
+Each example was run and its plots were looked at in a browser. CI
+compiles the examples (`cargo clippy --all-targets`, `cargo test`) but does
+not run them, and their output is not compared with that of Julia.
+
 ## Layout
 
 | Rust | BeforeIT.jl |
@@ -678,6 +729,7 @@ tests with all features on Rust 1.88.
 | `src/model_extensions/` | `src/model_extensions/` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
 | `src/julia.rs` | Julia's `min`, `max`, `round`, `sum`, `x^n` and `string(x)` of a float; `src/utils/positive.jl` |
+| `examples/` | `examples/`; the example in the README |
 
 ## Citation
 

@@ -20,3 +20,37 @@ plots = ["dep:plotters"]
 libm = "0.2.16"
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 plotters = { version = "0.3.7", default-features = false, features = ["svg_backend"], optional = true }
+
+# The examples of BeforeIT.jl (examples/); those that draw plots need the
+# feature plots.
+[[example]]
+name = "basic_example"
+required-features = ["plots"]
+
+[[example]]
+name = "basic_example_multibank"
+required-features = ["plots"]
+
+[[example]]
+name = "basic_inheritance"
+required-features = ["plots"]
+
+[[example]]
+name = "change_expectations"
+required-features = ["plots"]
+
+[[example]]
+name = "scenario_analysis_via_overload"
+required-features = ["plots"]
+
+[[example]]
+name = "scenario_analysis_via_shock"
+required-features = ["plots"]
+
+[[example]]
+name = "canvas_extension"
+required-features = ["plots"]
+
+[[example]]
+name = "conditional_forecasts"
+required-features = ["plots"]
