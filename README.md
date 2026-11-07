@@ -54,8 +54,9 @@ beforeit = { git = "https://github.com/ramonfueglister/port-beforeit" }
 
 It needs Rust 1.88 or newer. It depends on
 [`libm`](https://crates.io/crates/libm) and, to read the data sets,
-[`serde_json`](https://crates.io/crates/serde_json); it contains no `unsafe`
-code.
+[`serde_json`](https://crates.io/crates/serde_json) with the feature
+`float_roundtrip`, so that every number is read as the nearest `f64`, as
+Julia reads it; it contains no `unsafe` code.
 
 ## Usage
 
@@ -262,7 +263,7 @@ complete.
   the aggregates after quarters 1 and 5 against the values of the authors'
   MATLAB code, with the tolerances of BeforeIT.jl's tests. A
   stricter test requires every compared quantity to lie within 1e-10
-  (relative) of the MATLAB values; the largest deviation is 6.5e-13, for the
+  (relative) of the MATLAB values; the largest deviation is 8.0e-13, for the
   series of nominal capital formation over five quarters.
 - [`tests/accounting_identities.rs`](tests/accounting_identities.rs), as
   `test/accounting_identities.jl`: in runs of three quarters with three
