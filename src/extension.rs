@@ -387,9 +387,13 @@ pub trait Extension: Sized {
         base::search_and_matching_labour(m, rng)
     }
 
-    /// `search_and_matching!(model)`.
-    fn search_and_matching<R: Randomness + ?Sized>(m: &mut AbstractModel<Self>, rng: &mut R) {
-        base::search_and_matching(m, rng)
+    /// `search_and_matching!(model; parallel)`.
+    fn search_and_matching<R: Randomness + ?Sized>(
+        m: &mut AbstractModel<Self>,
+        rng: &mut R,
+        parallel: bool,
+    ) {
+        base::search_and_matching(m, rng, parallel)
     }
 
     // ---- src/utils/data.jl ----

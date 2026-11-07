@@ -12,7 +12,7 @@ use common::*;
 
 /// One quarter up to and including the goods market, as in the authors'
 /// test.
-fn until_goods_market(m: &mut Model, rng: &mut dyn Randomness) {
+fn until_goods_market(m: &mut Model, rng: &mut dyn Randomness, parallel: bool) {
     m.finance_insolvent_firms();
     m.set_growth_inflation_expectations(rng);
     m.set_epsilon(rng);
@@ -33,7 +33,7 @@ fn until_goods_market(m: &mut Model, rng: &mut dyn Randomness) {
     m.set_households_budget_banks();
     m.set_gov_expenditure(rng);
     m.set_rotw_import_export(rng);
-    m.search_and_matching(rng);
+    m.search_and_matching(rng, parallel);
 }
 
 /// Mean and standard deviation of ten quantities after the goods market in
@@ -51,11 +51,11 @@ const EXPECTED: [(&str, f64, f64); 10] = [
     ("Q_d_m", 535.7522, 9.6082),
 ];
 
-fn market_values(seed: u64) -> [f64; 10] {
+fn market_values(seed: u64, parallel: bool) -> [f64; 10] {
     let (p, ic) = austria();
     let rng = &mut Xoshiro::seed_from_u64(seed);
     let mut m = Model::new(&p, &ic, rng).unwrap();
-    until_goods_market(&mut m, rng);
+    until_goods_market(&mut m, rng, parallel);
     // All households in the order of the authors' test: bank owners,
     // workers, inactive persons, firm owners.
     let all = |field: fn(&Workers) -> &Vec<f64>, firms: &[f64], banks: &[f64]| {
@@ -80,33 +80,42 @@ fn market_values(seed: u64) -> [f64; 10] {
     ]
 }
 
-/// As in the authors' test: one run, each quantity within three standard
-/// deviations of the original's mean.
+/// As in the authors' test: one run with parallel and one with serial goods
+/// markets, each quantity within three standard deviations of the
+/// original's mean.
 #[test]
 fn goods_market_one_run_like_the_original() {
-    for ((name, expected, sigma), x) in EXPECTED.iter().zip(market_values(1)) {
-        check(name, x, *expected, 0.0, 3.0 * sigma);
+    for parallel in [true, false] {
+        for ((name, expected, sigma), x) in EXPECTED.iter().zip(market_values(1, parallel)) {
+            check(name, x, *expected, 0.0, 3.0 * sigma);
+        }
     }
 }
 
-/// Stricter: 50 runs. Their mean lies within three standard errors of the
-/// original's mean, and their standard deviation is close to the
-/// original's.
+/// Stricter: 50 runs each with serial and with parallel goods markets.
+/// Their mean lies within three standard errors of the original's mean,
+/// and their standard deviation is close to the original's.
 #[test]
 fn goods_market_mean_and_spread_like_the_original() {
+    for parallel in [false, true] {
+        mean_and_spread(parallel);
+    }
+}
+
+fn mean_and_spread(parallel: bool) {
     let n = 50;
-    let runs: Vec<[f64; 10]> = (1..=n).map(market_values).collect();
+    let runs: Vec<[f64; 10]> = (1..=n).map(|seed| market_values(seed, parallel)).collect();
     for (k, (name, expected, sigma)) in EXPECTED.iter().enumerate() {
         let z: Vec<f64> = runs.iter().map(|r| (r[k] - expected) / sigma).collect();
         let mean_z = mean(&z);
         let sd_z = (z.iter().map(|x| (x - mean_z).powi(2)).sum::<f64>() / (n - 1) as f64).sqrt();
         assert!(
             mean_z.abs() <= 3.0 / (n as f64).sqrt(),
-            "{name}: mean {mean_z:+.2} standard deviations from the original's"
+            "{name}, parallel {parallel}: mean {mean_z:+.2} standard deviations from the original's"
         );
         assert!(
             (0.6..=1.4).contains(&sd_z),
-            "{name}: standard deviation {sd_z:.2} times the original's"
+            "{name}, parallel {parallel}: standard deviation {sd_z:.2} times the original's"
         );
     }
 }

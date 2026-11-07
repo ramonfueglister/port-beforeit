@@ -36,6 +36,7 @@ pub mod julia;
 pub mod model_extensions;
 pub mod params;
 pub mod random;
+pub mod shocks;
 
 mod accounting;
 mod aggregates;
@@ -60,6 +61,9 @@ pub use model_extensions::canvas::{Canvas, ModelCANVAS};
 pub use model_extensions::growth_rate::{GrowthRate, ModelGR};
 pub use params::{InitialConditions, Parameters, Properties};
 pub use random::{Deterministic, Randomness, WeightVector, Xoshiro};
+pub use shocks::{
+    ConsumptionShock, InterestRateShock, NoShock, ProductivityShock, Shock, ensemblerun,
+};
 
 /// BeforeIT's methods for `AbstractModel`: the rules as BeforeIT.jl defines
 /// them, before any model type replaces them. They are the defaults of the
@@ -378,19 +382,37 @@ impl<X: Extension> AbstractModel<X> {
     /// desired employment of a firm is not a finite number (see
     /// [`AbstractModel::set_firms_expectations_and_decisions`]).
     pub fn step<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
-        self.step_with_shock(rng, |_| {});
+        self.step_with(rng, false, &NoShock);
     }
 
-    /// One quarter with a shock applied right after the policy rate is set,
-    /// `step!(model; shock!)`.
+    /// `T` quarters without collecting data, `step!(model, T; parallel,
+    /// shock!)`.
     ///
     /// # Panics
     ///
     /// As [`AbstractModel::step`].
-    pub fn step_with_shock<R, S>(&mut self, rng: &mut R, shock: S)
+    pub fn steps<R, S>(&mut self, T: usize, rng: &mut R, parallel: bool, shock: &S)
     where
         R: Randomness + ?Sized,
-        S: FnOnce(&mut Self),
+        S: Shock<X> + ?Sized,
+    {
+        for _ in 0..T {
+            self.step_with(rng, parallel, shock);
+        }
+    }
+
+    /// One quarter, `step!(model; parallel, shock!)`: `shock` is applied
+    /// right after the central bank has set the policy rate, and with
+    /// `parallel` the goods markets of the products run in parallel threads
+    /// (see [`base::search_and_matching`]).
+    ///
+    /// # Panics
+    ///
+    /// As [`AbstractModel::step`].
+    pub fn step_with<R, S>(&mut self, rng: &mut R, parallel: bool, shock: &S)
+    where
+        R: Randomness + ?Sized,
+        S: Shock<X> + ?Sized,
     {
         self.finance_insolvent_firms();
 
@@ -399,7 +421,7 @@ impl<X: Extension> AbstractModel<X> {
         self.set_epsilon(rng);
         self.set_growth_inflation_EA(rng);
         self.set_central_bank_rate();
-        shock(self);
+        shock.apply(self);
         self.set_banks_rate();
 
         // Firm expectations and decisions.
@@ -425,7 +447,7 @@ impl<X: Extension> AbstractModel<X> {
         self.set_rotw_import_export(rng);
 
         // Goods markets.
-        self.search_and_matching(rng);
+        self.search_and_matching(rng, parallel);
 
         // Final accounting.
         self.set_inflation_priceindex();
@@ -462,8 +484,22 @@ impl<X: Extension> AbstractModel<X> {
     ///
     /// As [`AbstractModel::step`].
     pub fn run<R: Randomness + ?Sized>(&mut self, T: usize, rng: &mut R) {
+        self.run_with(T, rng, false, &NoShock);
+    }
+
+    /// `run!(model, T; parallel, shock!)`: `T` quarters as
+    /// [`AbstractModel::step_with`], collecting data after each.
+    ///
+    /// # Panics
+    ///
+    /// As [`AbstractModel::step`].
+    pub fn run_with<R, S>(&mut self, T: usize, rng: &mut R, parallel: bool, shock: &S)
+    where
+        R: Randomness + ?Sized,
+        S: Shock<X> + ?Sized,
+    {
         for _ in 0..T {
-            self.step(rng);
+            self.step_with(rng, parallel, shock);
             self.collect_data();
         }
     }

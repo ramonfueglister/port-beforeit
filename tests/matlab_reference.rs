@@ -249,10 +249,16 @@ fn largest_deviation_from_matlab_is_below_1e_10() {
 }
 
 /// `one_epoch_deterministic.jl`: one quarter rule by rule, with the authors'
-/// values and tolerances. As there, the price indices are not updated
-/// before the stocks.
+/// values and tolerances, with serial and with parallel goods markets. As
+/// there, the price indices are not updated before the stocks.
 #[test]
 fn one_quarter_rule_by_rule() {
+    for parallel in [false, true] {
+        one_quarter(parallel);
+    }
+}
+
+fn one_quarter(parallel: bool) {
     let mut m = model();
     let rng = &mut Deterministic;
 
@@ -338,7 +344,7 @@ fn one_quarter_rule_by_rule() {
     check("Y_m", mean(&m.rotw.Y_m), 535.7254, 1e-6, 1e-6);
     check("P_m", mean(&m.rotw.P_m), 1.0031, 1e-4, 1e-6);
 
-    m.search_and_matching(rng);
+    m.search_and_matching(rng, parallel);
     let C_h = total(
         &m,
         |w| w.C_h.iter().sum(),

@@ -21,6 +21,17 @@ pub trait Randomness {
     /// Uniform integer in `0..n`, for `n` greater than 0.
     fn rand_below(&mut self, n: usize) -> usize;
 
+    /// A new generator for a task that runs in parallel, split off from
+    /// this one: the counterpart of the generator that a Julia task receives
+    /// when it is spawned. The parallel goods markets use one per product.
+    /// The default seeds an [`Xoshiro`] with a number drawn from this
+    /// generator; [`Xoshiro`] returns a copy of itself and jumps ahead, and
+    /// [`Deterministic`] returns itself.
+    fn split(&mut self) -> Box<dyn Randomness + Send> {
+        let seed = (self.rand() * (1u64 << 53) as f64) as u64;
+        Box::new(Xoshiro::seed_from_u64(seed))
+    }
+
     /// Shuffles a list, Julia `fshuffle!` (BeforeIT `src/utils/opt.jl`):
     /// Fisher–Yates from the front.
     fn shuffle(&mut self, v: &mut [usize]) {
@@ -225,6 +236,31 @@ impl Xoshiro {
         self.s
     }
 
+    /// Advances the state by 2^128 draws, the jump function of the
+    /// reference implementation of xoshiro256**. Generators split off by
+    /// [`Randomness::split`] therefore draw from parts of the sequence that
+    /// do not overlap.
+    pub fn jump(&mut self) {
+        const JUMP: [u64; 4] = [
+            0x180e_c6d3_3cfd_0aba,
+            0xd5a6_1266_f0c9_392c,
+            0xa958_2618_e03f_c9aa,
+            0x39ab_dc45_29b1_661c,
+        ];
+        let mut s = [0u64; 4];
+        for j in JUMP {
+            for b in 0..64 {
+                if j & (1u64 << b) != 0 {
+                    for (x, y) in s.iter_mut().zip(self.s) {
+                        *x ^= y;
+                    }
+                }
+                self.next_u64();
+            }
+        }
+        self.s = s;
+    }
+
     pub fn next_u64(&mut self) -> u64 {
         let result = self.s[1].wrapping_mul(5).rotate_left(7).wrapping_mul(9);
         let t = self.s[1] << 17;
@@ -248,6 +284,13 @@ impl Randomness for Xoshiro {
 
     fn rand(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
+    /// A copy of this generator; this one then jumps 2^128 draws ahead.
+    fn split(&mut self) -> Box<dyn Randomness + Send> {
+        let child = self.clone();
+        self.jump();
+        Box::new(child)
     }
 
     /// Unbiased, with Lemire's multiply-and-reject method.
@@ -275,10 +318,15 @@ impl Randomness for Deterministic {
         0.0
     }
 
-    /// The model calls `rand` only from `randpl` and `sample`, which are
-    /// replaced here.
+    /// The model calls `rand` from `randpl` and `sample`, which are replaced
+    /// here, and for the Calvo draw of the CANVAS model, where 0 lets every
+    /// firm adjust its price.
     fn rand(&mut self) -> f64 {
         0.0
+    }
+
+    fn split(&mut self) -> Box<dyn Randomness + Send> {
+        Box::new(Deterministic)
     }
 
     /// Julia's test replaces `rand(1:n)` by 1, the first entry.
@@ -325,6 +373,52 @@ mod tests {
         for e in expected {
             assert_eq!(rng.next_u64(), e);
         }
+    }
+
+    /// The jump advances the state by 2^128 steps. A step is linear over
+    /// GF(2), so the state after 2^128 steps is the step's 256 × 256 bit
+    /// matrix squared 128 times, applied to the state.
+    #[test]
+    fn jump_is_2_to_the_128_steps() {
+        type State = [u64; 4];
+        // A matrix as the images of the 256 unit states.
+        let apply = |m: &[State], s: State| {
+            let mut r = [0u64; 4];
+            for (j, col) in m.iter().enumerate() {
+                if s[j / 64] >> (j % 64) & 1 == 1 {
+                    for w in 0..4 {
+                        r[w] ^= col[w];
+                    }
+                }
+            }
+            r
+        };
+        let mut m: Vec<State> = (0..256)
+            .map(|j| {
+                let mut s = [0u64; 4];
+                s[j / 64] = 1 << (j % 64);
+                let mut x = Xoshiro { s };
+                x.next_u64();
+                x.s
+            })
+            .collect();
+        for _ in 0..128 {
+            m = m.iter().map(|&col| apply(&m, col)).collect();
+        }
+        for seed in [1, 42, 123_456_789] {
+            let mut x = Xoshiro::seed_from_u64(seed);
+            let expected = apply(&m, x.state());
+            x.jump();
+            assert_eq!(x.state(), expected);
+        }
+        // The generator split off is the old state; the parent jumps.
+        let mut x = Xoshiro::seed_from_u64(5);
+        let mut child = x.split();
+        let mut copy = Xoshiro::seed_from_u64(5);
+        assert_eq!(child.rand(), copy.rand());
+        copy = Xoshiro::seed_from_u64(5);
+        copy.jump();
+        assert_eq!(x, copy);
     }
 
     /// SplitMix64 outputs for the seed 0.

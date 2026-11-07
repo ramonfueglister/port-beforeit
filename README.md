@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | Calibration with its data `ITALY_CALIBRATION`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | Calibration with its data `ITALY_CALIBRATION`, prediction pipelines and forecast evaluation; the package extensions in `ext/` |
 
 ## Installation
 
@@ -94,9 +94,13 @@ cargo run --release --example austria
 | `ModelCANVAS::new(&p, &ic, &mut rng)`, `ModelGR::new(&p, &ic, &mut rng)` | `ModelCANVAS(parameters, initial_conditions)`, `ModelGR(parameters, initial_conditions)` |
 | `p.n_banks = 3` before `Model::new` | `parameters["n_banks"] = 3` |
 | `model.step(&mut rng)` | `step!(model)` |
-| `model.step_with_shock(&mut rng, shock)` | `step!(model; shock!)` |
+| `model.step_with(&mut rng, parallel, &shock)` | `step!(model; parallel, shock!)` |
+| `model.steps(T, &mut rng, parallel, &shock)` | `step!(model, T; parallel, shock!)` |
 | `model.collect_data()` | `collect_data!(model)` |
 | `model.run(T, &mut rng)` | `run!(model, T)` |
+| `model.run_with(T, &mut rng, parallel, &shock)` | `run!(model, T; parallel, shock!)` |
+| `ensemblerun(&mut models, T, &mut rng, parallel, &shock)` | `ensemblerun!(models, T; parallel, shock!)` |
+| `InterestRateShock { rate: 0.01, final_time: 4 }` | `InterestRateShock(0.01, 4)` |
 | `model.firms.Y_i[i]`, `model.cb.r_bar`, ... | `model.firms.Y_i[i]`, `model.cb.r_bar`, ... |
 | `model.data.real_gdp`, ... | `model.data.real_gdp`, ... |
 | `let i = model.w_act.index(id); model.w_act.Y_h[i]` | `model.w_act[id].Y_h` |
@@ -123,26 +127,42 @@ inflation, and inflation where it expects growth. The growth-rate model
 replaces the AR(1) processes on logarithms by AR(1) processes on growth
 rates for the expectations, government consumption, exports and imports.
 
-A shock is a closure that `step_with_shock` calls right after the central
-bank has set the policy rate, where `step!` calls `shock!`. BeforeIT.jl's
-`InterestRateShock(0.01, 4)` becomes:
+A shock changes the model in every quarter right after the central bank has
+set the policy rate, where `step!` calls `shock!`. BeforeIT.jl's shock types
+`NoShock`, `InterestRateShock`, `ProductivityShock` and `ConsumptionShock`
+implement the trait `Shock`, and so does every closure that takes the model:
 
 ```rust
-use beforeit::{Model, Xoshiro};
+use beforeit::{AUSTRIA2010Q1, InterestRateShock, Model, Xoshiro, ensemblerun};
 
-/// Simulates `quarters` quarters with the policy rate at 1% while the
-/// model time `agg.t` is at most 4.
-fn run_with_rate_shock(model: &mut Model, quarters: usize, rng: &mut Xoshiro) {
-    for _ in 0..quarters {
-        model.step_with_shock(rng, |m| {
-            if m.agg.t <= 4 {
-                m.cb.r_bar = 0.01;
-            }
-        });
-        model.collect_data();
-    }
+/// Ten runs of 12 quarters with the policy rate at 1% while the model time
+/// `agg.t` is at most 4, in parallel threads.
+fn rate_scenario() -> Result<Vec<Model>, String> {
+    let s = &*AUSTRIA2010Q1;
+    let mut rng = Xoshiro::seed_from_u64(1);
+    let model = Model::new(&s.parameters, &s.initial_conditions, &mut rng)?;
+    let mut models = vec![model; 10];
+    let shock = InterestRateShock { rate: 0.01, final_time: 4 };
+    ensemblerun(&mut models, 12, &mut rng, true, &shock);
+    Ok(models)
+}
+
+/// The same shock written as a closure, for one quarter of one model.
+fn one_quarter(model: &mut Model, rng: &mut Xoshiro) {
+    model.step_with(rng, false, &|m: &mut Model| {
+        if m.agg.t <= 4 {
+            m.cb.r_bar = 0.01;
+        }
+    });
 }
 ```
+
+With `parallel`, the goods markets of the products run in parallel threads,
+and `ensemblerun` runs the models in parallel threads. Each product's market
+and each model of the ensemble draws from its own generator, split off from
+the given one in a fixed order (`Randomness::split`), so a parallel run is
+reproducible and does not depend on the number of threads; it differs from
+the serial run with the same seed, as in BeforeIT.jl.
 
 `cargo doc --open` shows the documentation of every type and rule.
 
@@ -209,6 +229,16 @@ from the `libm` crate, not from the system's math library.
    example for lists of the wrong length, a matrix `C` that is not positive
    definite, more jobs than workers, or a bank without firms. `Model::step` panics where the Julia
    code throws during a step; its documentation lists the cases.
+6. **Parallel runs.** In BeforeIT.jl, each task spawned for a product or a
+   model draws from its own generator forked from the task-local one, and
+   the parallel goods markets add the households' consumption and
+   investment under a lock in the order in which the tasks finish, so the
+   last digits can change from run to run. The port splits one generator
+   per product or model off the given one with the jump function of
+   xoshiro256\*\* (2^128 draws ahead), runs them on system threads and adds
+   the products' results in the order of the products, as the serial
+   version does. Without randomness, parallel and serial runs are
+   therefore identical.
 
 ## Where BeforeIT.jl differs from the paper
 
@@ -228,8 +258,9 @@ complete.
 
 - [`tests/matlab_reference.rs`](tests/matlab_reference.rs), as BeforeIT.jl's
   `test/deterministic`: without randomness, the initial state, every rule of
-  one quarter, and the aggregates after quarters 1 and 5 against the values
-  of the authors' MATLAB code, with the tolerances of BeforeIT.jl's tests. A
+  one quarter (with serial and with parallel goods markets, as there), and
+  the aggregates after quarters 1 and 5 against the values of the authors'
+  MATLAB code, with the tolerances of BeforeIT.jl's tests. A
   stricter test requires every compared quantity to lie within 1e-10
   (relative) of the MATLAB values; the largest deviation is 6.5e-13, for the
   series of nominal capital formation over five quarters.
@@ -251,8 +282,19 @@ complete.
   implementation given in `test/markets/search_and_matching.jl`: one run
   within three standard deviations, as there, and 50 runs whose mean lies
   within three standard errors and whose standard deviation lies between 0.6
-  and 1.4 times the original's. Also: the same seed gives the same run, and a
-  saved state continues exactly like the original run.
+  and 1.4 times the original's, each with serial and with parallel goods
+  markets. Also: the same seed gives the same run, and a saved state
+  continues exactly like the original run.
+- [`tests/parallel.rs`](tests/parallel.rs): without randomness, parallel
+  goods markets give the same run as serial ones (as
+  `test/deterministic/one_run_deterministic.jl`, which allows 1e-4); parallel
+  runs are reproducible and keep the accounting identities; `ensemblerun`
+  runs the models one after the other without `parallel`, and with
+  `parallel` gives each model the generator split off for it, also with
+  more models than threads and for `ModelCANVAS`.
+- [`tests/shocks.rs`](tests/shocks.rs), as `test/shocks/shocks.jl`: the
+  shock types, and that `run_with` applies a shock in every quarter before
+  the data are collected.
 - [`tests/agent_actions.rs`](tests/agent_actions.rs) and
   [`tests/estimate.rs`](tests/estimate.rs): single rules and the AR(1)
   estimate with the numbers of `test/agent_actions` and
@@ -281,7 +323,9 @@ complete.
   code.
 - Unit tests in `src/`: the Julia semantics of `min`, `max`, `round`,
   `matlab_round`, `pos`, `neg`, `pos!`, `neg!` and the order of `sum`;
-  xoshiro256\*\* and SplitMix64 against reference outputs; the
+  xoshiro256\*\* and SplitMix64 against reference outputs, and its jump
+  function against the 2^128-th power of the generator's transition
+  matrix over GF(2); the
   distributions of the draws; the Cholesky factor; `rfvar3`,
   `estimate_for_calibration_script` and `estimate_taylor_rule` against the
   values of BeforeIT.jl's tests (the last with regressors of rank 2, where
@@ -300,7 +344,8 @@ tests on stable Rust, and the tests on Rust 1.88.
 
 | Rust | BeforeIT.jl |
 |---|---|
-| `src/lib.rs`: `Model`, `step`, `run` | `src/model_init/init.jl`, `agents.jl`, `src/one_step.jl`, `src/one_simulation.jl` |
+| `src/lib.rs`: `Model`, `step`, `run` | `src/model_init/init.jl`, `agents.jl`, `src/one_step.jl`, `run!` in `src/one_simulation.jl` |
+| `src/shocks.rs` | `src/shocks/shocks.jl`, `ensemblerun!` in `src/one_simulation.jl` |
 | `src/extension.rs` | model types: `src/model_init/object_macro.jl` and methods per model type |
 | `src/params.rs` | the inputs and `src/model_init/init_properties.jl` |
 | `src/agents.rs` | `src/model_init/`, `src/utils/modify.jl` |
