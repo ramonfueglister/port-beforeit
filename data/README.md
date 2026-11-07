@@ -35,7 +35,7 @@ differ from the JLD2 files, which are the ones BeforeIT.jl loads.
 
 `italy/calibration.json` is BeforeIT's `ITALY_CALIBRATION` (constant in
 `src/utils/standard_calibration_data.jl`), which the crate embeds under the
-same name: the four files of the folder `data/italy/calibration` of
+same name: the four JLD2 files of the folder `data/italy/calibration` of
 BeforeIT.jl at the commit above with the dates of
 `standard_calibration_data.jl`.
 

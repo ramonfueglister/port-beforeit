@@ -394,9 +394,11 @@ impl<X: Extension> AbstractModel<X> {
     /// # Panics
     ///
     /// Where the Julia code throws: if `prop.C` was changed to a matrix from
-    /// which no shocks can be drawn (see [`base::epsilon`]), or if the
+    /// which no shocks can be drawn (see [`base::epsilon`]), if the
     /// desired employment of a firm is not a finite number (see
-    /// [`AbstractModel::set_firms_expectations_and_decisions`]).
+    /// [`AbstractModel::set_firms_expectations_and_decisions`]), or, in
+    /// `ModelCANVAS`, if a regressor of the re-estimated Taylor rule is NaN
+    /// (see [`estimate::estimate_taylor_rule`]).
     pub fn step<R: Randomness + ?Sized>(&mut self, rng: &mut R) {
         self.step_with(rng, false, &NoShock);
     }

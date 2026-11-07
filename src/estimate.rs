@@ -162,6 +162,25 @@ pub struct Var {
     pub snglty: usize,
 }
 
+/// Whether [`rfvar3`] with these arguments meets a NaN among regressors
+/// that are not two columns, where Julia's `svd` throws (LAPACK's
+/// `dgesdd` rejects the NaN): a value of `ydata` that enters a lag of a row
+/// after the first `lags`, or a value of `xdata` in such a row (rows
+/// `lags..ydata.len()`; rows of `xdata` from `ydata.len()` on are not
+/// regressors).
+pub(crate) fn nan_in_regressors(ydata: &[Vec<f64>], lags: usize, xdata: &[Vec<f64>]) -> bool {
+    let T = ydata.len();
+    let nvar = ydata.first().map_or(0, |r| r.len());
+    let nx = xdata.first().map_or(0, |r| r.len());
+    nvar * lags + nx != 2
+        && (lags..T).any(|t| {
+            (0..lags).any(|l| ydata[t - l - 1].iter().take(nvar).any(|v| v.is_nan()))
+                || xdata
+                    .get(t)
+                    .is_some_and(|r| r.iter().take(nx).any(|v| v.is_nan()))
+        })
+}
+
 /// `rfvar3(ydata, lags, xdata)` (BeforeIT `src/utils/nfvar3.jl`): least
 /// squares for a vector autoregression of the series in the columns of
 /// `ydata` (one row per quarter) with `lags` lags and the exogenous
@@ -173,7 +192,17 @@ pub struct Var {
 ///
 /// # Panics
 ///
-/// If `xdata` has fewer rows than `ydata` (Julia throws a `BoundsError`).
+/// If `ydata` has more rows than `lags` and `xdata` has fewer rows than
+/// `ydata` and at least one column. Julia throws a `BoundsError` whenever
+/// `ydata` has more rows than `lags` and `xdata` fewer rows than `ydata`,
+/// also when `xdata` has no columns, where this function returns instead.
+/// Also where Julia throws in the singular value decomposition of the
+/// regressors: if they are two columns and `ydata` has no more rows than
+/// `lags` (Julia's `svd_mx2`), and if they are one column or more than two
+/// and one of them is NaN (LAPACK's `dgesdd`, which Julia's `svd` calls,
+/// rejects it, and Julia throws an `ArgumentError`).
+/// [`crate::varx::estimate_VAR`] and [`crate::varx::estimate_VARX`] return
+/// an error instead.
 pub fn rfvar3(ydata: &[Vec<f64>], lags: usize, xdata: &[Vec<f64>]) -> Var {
     let T = ydata.len();
     let nvar = ydata.first().map_or(0, |r| r.len());
@@ -198,6 +227,13 @@ pub fn rfvar3(ydata: &[Vec<f64>], lags: usize, xdata: &[Vec<f64>]) -> Var {
     let y: Vec<Vec<f64>> = (0..nvar)
         .map(|e| smpl.clone().map(|t| ydata[t][e]).collect())
         .collect();
+    // Julia's `svd` hands regressors that are not two columns to LAPACK's
+    // `dgesdd` if they have rows and columns, and `dgesdd` rejects a NaN.
+    if k != 2 && X.iter().flatten().any(|v| v.is_nan()) {
+        panic!(
+            "rfvar3: a regressor is NaN (LAPACK's dgesdd rejects it and Julia throws an ArgumentError)"
+        );
+    }
     let svd = if k == 2 {
         let s = svd_mx2(&X[0], &X[1]);
         Svd {
@@ -224,7 +260,14 @@ pub fn rfvar3(ydata: &[Vec<f64>], lags: usize, xdata: &[Vec<f64>]) -> Var {
         .map(|t| {
             (0..nvar)
                 .map(|e| {
-                    let fit = (1..k).fold(X[0][t] * B[0][e], |acc, i| acc + X[i][t] * B[i][e]);
+                    // Without regressors (no lags and no exogenous
+                    // variables), Julia's `X * B` is a matrix of zeros with
+                    // one column per equation, so `u = y`.
+                    let fit = if k == 0 {
+                        0.0
+                    } else {
+                        (1..k).fold(X[0][t] * B[0][e], |acc, i| acc + X[i][t] * B[i][e])
+                    };
                     y[e][t] - fit
                 })
                 .collect()
@@ -266,7 +309,17 @@ pub fn rfvar3(ydata: &[Vec<f64>], lags: usize, xdata: &[Vec<f64>]) -> Var {
 
 /// `rfvar3(ydata, 1, ones(T, 1))` for one series, Julia's `ydata[:, :]`:
 /// the AR(1) with a constant of [`estimate`].
+///
+/// # Panics
+///
+/// For fewer than two values: the regressors, the lag and the constant,
+/// then have no row, and Julia's `svd_mx2` throws.
 fn ar1(ydata: &[f64]) -> Var {
+    assert!(
+        ydata.len() >= 2,
+        "AR(1) estimate of {} values (Julia's svd_mx2 throws)",
+        ydata.len()
+    );
     let y: Vec<Vec<f64>> = ydata.iter().map(|&x| vec![x]).collect();
     rfvar3(&y, 1, &vec![vec![1.0]; ydata.len()])
 }
@@ -281,6 +334,10 @@ fn variance(u: &[Vec<f64>]) -> f64 {
 /// `estimate(ydata)`: coefficients of the AR(1) estimate and a shock with
 /// mean 0 and the standard deviation of the residuals (0 if that is not
 /// positive).
+///
+/// # Panics
+///
+/// For fewer than two values of `ydata` (Julia's `svd_mx2` throws).
 pub fn estimate<R: Randomness + ?Sized>(ydata: &[f64], rng: &mut R) -> (f64, f64, f64) {
     let var = ar1(ydata);
     let sigma = max(0.0, variance(&var.u)).sqrt();
@@ -295,6 +352,10 @@ pub fn estimate<R: Randomness + ?Sized>(ydata: &[f64], rng: &mut R) -> (f64, f64
 /// `estimate_for_calibration_script(ydata)`: coefficients `alpha` and
 /// `beta` of the AR(1) estimate, the standard deviation `sigma` of the
 /// residuals and the residuals.
+///
+/// # Panics
+///
+/// For fewer than two values of `ydata` (Julia's `svd_mx2` throws).
 pub fn estimate_for_calibration_script(ydata: &[f64]) -> (f64, f64, f64, Vec<f64>) {
     let var = ar1(ydata);
     let sigma = variance(&var.u).sqrt();
@@ -311,7 +372,11 @@ pub fn estimate_for_calibration_script(ydata: &[f64]) -> (f64, f64, f64, Vec<f64
 ///
 /// # Panics
 ///
-/// If `pi_EA` or `gamma_EA` is shorter than `r_bar` (Julia throws).
+/// If `pi_EA` or `gamma_EA` is shorter than `r_bar` (Julia throws), and if
+/// `r_bar` has at least two entries and one of the regressors is NaN: an
+/// entry of `r_bar` but the last, or an entry of `pi_EA` or `gamma_EA` from
+/// the second to the `r_bar.len()`-th (Julia's `svd` throws in
+/// [`rfvar3`]).
 pub fn estimate_taylor_rule(
     r_bar: &[f64],
     pi_EA: &[f64],
@@ -329,6 +394,15 @@ pub fn estimate_taylor_rule(
     let pi_star = libm::pow(0.02 + 1.0, 1.0 / 4.0) - 1.0;
     let r_star = pi_star * (xi_pi - 1.0);
     (rho, r_star, xi_pi, xi_gamma, pi_star)
+}
+
+/// Whether [`estimate_taylor_rule`] meets a NaN among its regressors, where
+/// it panics (Julia's `svd` throws).
+pub(crate) fn taylor_rule_regressor_is_nan(r_bar: &[f64], pi_EA: &[f64], gamma_EA: &[f64]) -> bool {
+    let n = r_bar.len().min(pi_EA.len()).min(gamma_EA.len());
+    let ydata: Vec<Vec<f64>> = r_bar[..n].iter().map(|&x| vec![x]).collect();
+    let exo: Vec<Vec<f64>> = (0..n).map(|t| vec![pi_EA[t], gamma_EA[t]]).collect();
+    nan_in_regressors(&ydata, 1, &exo)
 }
 
 /// `estimate_next_value(data)`: next value of the series by the AR(1) rule.
@@ -484,6 +558,37 @@ mod tests {
         assert!(close(xi_pi, 1.250000000000001, 1e-5), "{xi_pi}");
         assert!(close(xi_gamma, -0.250000000000001, 1e-5), "{xi_gamma}");
         assert!(close(pi_star, 0.004962931573204, 1e-5), "{pi_star}");
+    }
+
+    /// A NaN among regressors that are not two columns (here one column:
+    /// one variable, one lag, no exogenous variables): Julia's `svd` throws
+    /// (LAPACK's `dgesdd` rejects the NaN), and `rfvar3` panics.
+    #[test]
+    #[should_panic(expected = "a regressor is NaN")]
+    fn rfvar3_panics_on_nan_regressors_as_julia_throws() {
+        let y = [vec![1.0], vec![f64::NAN], vec![2.0], vec![3.0]];
+        rfvar3(&y, 1, &vec![vec![]; 4]);
+    }
+
+    /// `taylor_rule_regressor_is_nan` looks only at the entries that are
+    /// regressors, for series of equal length as here: `r_bar` without its
+    /// last entry, `pi_EA` and `gamma_EA` without their first.
+    #[test]
+    fn taylor_rule_regressors_with_nan() {
+        let r = [0.01, 0.012, 0.011, 0.013];
+        let pi = [f64::NAN, 0.005, 0.006, 0.004];
+        let g = [0.003, 0.002, 0.004, 0.001];
+        // The first entries of pi_EA and gamma_EA and the last of r_bar are
+        // not regressors.
+        assert!(!taylor_rule_regressor_is_nan(&r, &pi, &g));
+        let mut r_nan = r;
+        r_nan[3] = f64::NAN;
+        assert!(!taylor_rule_regressor_is_nan(&r_nan, &pi, &g));
+        r_nan[2] = f64::NAN;
+        assert!(taylor_rule_regressor_is_nan(&r_nan, &pi, &g));
+        let mut g_nan = g;
+        g_nan[1] = f64::NAN;
+        assert!(taylor_rule_regressor_is_nan(&r, &pi, &g_nan));
     }
 
     /// The Jacobi SVD against a matrix with known singular values, and

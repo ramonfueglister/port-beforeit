@@ -151,7 +151,8 @@ fn var_forecasts_agree_with_numpy() {
     let y = matrix(&r["var"], "y");
     for (key, want) in r["var"]["forecasts"].as_object().unwrap() {
         let (intercept, lags) = key.split_once('_').unwrap();
-        let f = forecast_k_steps_VAR(&y, 8, intercept == "True", lags.parse().unwrap(), None);
+        let f =
+            forecast_k_steps_VAR(&y, 8, intercept == "True", lags.parse().unwrap(), None).unwrap();
         let want: Vec<Vec<f64>> = want.as_array().unwrap().iter().map(pair).collect();
         for (t, (a, b)) in f.iter().zip(&want).enumerate() {
             close_all(&format!("VAR {key} step {t}"), a, b, 1e-12, 1e-14);

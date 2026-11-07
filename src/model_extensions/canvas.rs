@@ -151,7 +151,8 @@ impl Extension for Canvas {
     /// of the histories, stores them in the central bank, applies the rule
     /// and appends the new rate to `r_bar_series`. As in BeforeIT.jl, the
     /// estimate receives euro area GDP in levels in the place of inflation
-    /// and euro area inflation in the place of growth.
+    /// and euro area inflation in the place of growth. Panics, where Julia
+    /// throws, if one of its regressors is NaN.
     fn central_bank_rate(m: &mut AbstractModel<Self>) -> f64 {
         let n = m.prop.T_prime + m.agg.t - 1;
         let e = &m.ext;

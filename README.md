@@ -137,8 +137,10 @@ afterwards `index(id)` gives its position.
 
 `ModelCANVAS` and `ModelGR` are BeforeIT.jl's model extensions
 (`src/model_extensions/`). In the CANVAS model (Hommes et al., 2025), firms
-set prices and quantities by demand pull, only a share `theta_calvo` of them
-adjusts prices in a quarter, and the central bank re-estimates the Taylor
+set prices and quantities by demand pull, each firm applies its demand-pull
+and cost-push price changes in a quarter only with probability
+`theta_calvo` (all prices still move with expected inflation), and the
+central bank re-estimates the Taylor
 rule every quarter; its histories are in `model.ext` (BeforeIT.jl keeps
 them in `model.cb` and `model.rotw`). As in BeforeIT.jl, this estimate
 receives euro area GDP in levels where `estimate_taylor_rule` expects
@@ -149,7 +151,10 @@ rates for the expectations, government consumption, exports and imports.
 A shock changes the model in every quarter right after the central bank has
 set the policy rate, where `step!` calls `shock!`. BeforeIT.jl's shock types
 `NoShock`, `InterestRateShock`, `ProductivityShock` and `ConsumptionShock`
-implement the trait `Shock`, and so does every closure that takes the model:
+implement the trait `Shock`, and so does every closure that implements
+`Fn(&mut AbstractModel<X>)`, for example every closure written
+`|m: &mut Model| { ... }` that returns `()` and neither moves out of the
+variables it captures nor needs `&mut` access to them:
 
 ```rust
 use beforeit::{AUSTRIA2010Q1, InterestRateShock, Model, Xoshiro, ensemblerun};
@@ -472,8 +477,13 @@ has two implementations:
   comparison with the reference values of the authors' MATLAB code.
 
 Another generator can be used by implementing the three methods `randn`,
-`rand` and `rand_below`. Mathematical functions such as `exp` and `log` come
-from the `libm` crate, not from the system's math library.
+`rand` and `rand_below`. Outside the plots, the library takes
+mathematical functions such as `exp` and `log` from the `libm` crate, not
+from the system's math library. The plots (feature `plots`), including the
+code of `plotters` that they call, and some examples use the standard
+library's functions, which call the system's math library: for example
+`log10` on logarithmic axes, `sin` and `cos` for rotated labels, and `ln`
+and `exp` in the example `canvas_extension`.
 
 ## Differences from BeforeIT.jl
 
@@ -513,8 +523,8 @@ from the `libm` crate, not from the system's math library.
    still reorder additions inside a block (`@simd`), and it calls BLAS for
    dot products and norms, which the port adds from left to right, and
    LAPACK for the singular value decomposition in `rfvar3` when the
-   regressors have more than two columns, which the port computes with
-   one-sided Jacobi rotations. Results
+   regressors have one column or more than two columns and at least one
+   row, which the port computes with one-sided Jacobi rotations. Results
    can therefore differ from BeforeIT.jl in the last digits. The port has
    not been run side by side with Julia; it is checked against the reference
    values that the tests of BeforeIT.jl use (see [Verification](#verification)).
@@ -537,10 +547,18 @@ from the `libm` crate, not from the system's math library.
    `std::thread::available_parallelism` gives, for the products of one
    model and for the models of `ensemblerun`, whose models each run their
    goods markets in parallel, so that an ensemble can have the square of
-   that number of threads at once.
-7. **Calibration.** Where BeforeIT.jl would throw (for example for a date
-   that is not in the data) or would carry a `missing` value of the data
-   into a parameter, the port returns an error message. BeforeIT.jl stores
+   that number of product threads at once, besides one thread per group of
+   models.
+7. **Calibration.** Where BeforeIT.jl would carry a `missing` value of
+   the data into a parameter, or would throw for a date that is not in the
+   data, an estimation date too close to the calibration date, the
+   logarithm of a negative number or a NaN regressor of the Taylor rule,
+   the port returns an error message, also where nominal and real GDP
+   differ in size other than by trailing dimensions of length 1 (Julia
+   throws or broadcasts one over the other). Series by industry whose
+   number of rows differs from that of the input-output table, for which
+   BeforeIT.jl throws a `DimensionMismatch`, are not checked: the port then
+   panics or returns a result. BeforeIT.jl stores
    the GDP deflators in the caller's dictionaries `data` and `ea`; the port
    does not change the calibration data. Dates are calendar days: Julia's
    `num2date` also keeps a time of day, which the calibration never uses.
@@ -550,11 +568,15 @@ from the `libm` crate, not from the system's math library.
    into the forecasts as `missing` or broadcast over several values. The
    result is a struct with the series as `time × runs` matrices given by
    their rows (`Predictions`) instead of a dictionary. The tests, VAR
-   forecasts and correlations return errors where Julia throws; the
+   estimates and forecasts and correlations return errors where Julia
+   throws (for the VAR, for example, data with too few rows for the lags,
+   or a NaN among regressors that LAPACK's `dgesdd` rejects in Julia); the
    stochastic VAR forecasts draw from a given generator instead of Julia's
    global one. Files are JSON instead of JLD2. The batch runs and error
    tables print what BeforeIT.jl logs with `@warn` to standard error and
-   return errors where Julia throws; `save_all_simulations` skips a quarter
+   return errors where Julia throws, for example for the logarithm of a
+   negative number, for which the transformations of the variables
+   (`VarSpec`) return errors; `save_all_simulations` skips a quarter
    whose model returns an error or panics, as Julia catches the exception.
    The AR and VAR benchmarks of the error tables accept a `missing` value
    of the data in rows that their estimation does not use, as Julia does
@@ -578,9 +600,11 @@ from the `libm` crate, not from the system's math library.
     limits, ticks, legend) instead of Plots.jl objects, and `plotters`
     draws them as SVG. Automatic axis limits are widened by 6 % and the
     legend goes to the least crowded corner, as in Plots.jl; fonts,
-    margins, axes, dash patterns and the format of the tick numbers are
-    those of `plotters` (large and small numbers with a power of ten, such
-    as `3.95e11`); rotated tick labels are SVG text next to the drawing of
+    margins, axes and dash patterns are those of `plotters`, and so is the
+    format of the tick numbers, except that the port writes magnitudes from
+    10^5 on and nonzero magnitudes below 10^-4 with a power of ten (such as
+    `3.95e11`); rotated
+    tick labels are SVG text next to the drawing of
     `plotters`, a line that leaves the x limits ends at its last point
     inside them, and heatmaps have no colour bar. The functions return an error where Julia throws, also for a
     `missing` value of the data within the period of the predictions in
@@ -643,8 +667,9 @@ keeps:
   one quarter (with serial and with parallel goods markets, as there), and
   the aggregates after quarters 1 and 5 against the values of the authors'
   MATLAB code, with the tolerances of BeforeIT.jl's tests. A
-  stricter test requires every compared quantity to lie within 1e-10
-  (relative) of the MATLAB values; the largest deviation is 8.0e-13, for the
+  stricter test requires every compared quantity of the initial state and
+  of the aggregates after quarters 1 and 5 to lie within 1e-10 (relative)
+  of the MATLAB values; the largest deviation is 8.0e-13, for the
   series of nominal capital formation over five quarters.
 - [`tests/accounting_identities.rs`](tests/accounting_identities.rs), as
   `test/accounting_identities.jl`: in runs of three quarters with three
@@ -673,7 +698,8 @@ keeps:
   runs are reproducible and keep the accounting identities; `ensemblerun`
   runs the models one after the other without `parallel`, and with
   `parallel` gives each model the generator split off for it, also with
-  more models than threads and for `ModelCANVAS`.
+  more models than threads; a parallel ensemble of `ModelCANVAS` runs too,
+  with different results per model.
 - [`tests/shocks.rs`](tests/shocks.rs), as `test/shocks/shocks.jl`: the
   shock types, and that `run_with` applies a shock in every quarter before
   the data are collected.
@@ -698,7 +724,10 @@ keeps:
   of the Julia test.
 - [`tests/calibration.rs`](tests/calibration.rs): the calibration of
   `ITALY_CALIBRATION` for 2010Q1, and for 2019Q4 with `use_growth_rate_ar1`
-  (a date after the time series, where the histories end in NaN), against an
+  (the last quarter of the time series, so that the last 12 entries of the
+  histories `C_G`, `C_E` and `Y_I` are NaN; it lies after 2016Q4, the last
+  quarter that
+  `get_valid_calibration_quarters` returns), against an
   independent NumPy translation of `calibration.jl`
   ([`tests/data/calibration_reference.py`](tests/data/calibration_reference.py)):
   the estimates of the AR(1) processes within 1e-8 (relative; see the test
@@ -727,9 +756,11 @@ keeps:
   VAR and VARX forecasts, the HP filter, the correlations and
   `correlation_stats` against an independent NumPy/SciPy translation
   ([`tests/data/evaluation_reference.py`](tests/data/evaluation_reference.py)):
-  within 1e-12 (relative), the HP filter's cycle within 1e-10 (absolute,
-  for series around 100) because LAPACK and the port order the operations
-  of the LU factorization differently. Also the checks of
+  within 1e-12 (relative; values near 0 within 1e-14 absolute), except the
+  HP filter's cycle, within 1e-10 (absolute, for series around 100), and
+  the auto- and cross-correlations of `correlation_stats`, which are
+  computed from HP cycles, within 1e-9 (absolute): LAPACK and the port
+  order the operations of the LU factorization differently. Also the checks of
   `test/utils/correlation_utils.jl`, and errors where Julia throws.
 - [`tests/analysis.rs`](tests/analysis.rs): the batch runs and all error
   tables as in BeforeIT's example, for 2010Q1 to 2011Q4 of
@@ -787,13 +818,18 @@ keeps:
   shocks `epsilon` against the MATLAB values in
   `test/deterministic/epsilon.jl`.
 
-The data sets and the reference values are converted from files of
-BeforeIT.jl by [`data/convert.py`](data/convert.py),
+The data sets, the MATLAB values in `tests/data/matlab_*.json` and Julia's
+predictions in `tests/data/prediction_pipeline_2010Q1.json` are converted
+from files of BeforeIT.jl by [`data/convert.py`](data/convert.py),
 [`data/convert_calibration.py`](data/convert_calibration.py) and
 [`tests/data/convert.py`](tests/data/convert.py), which reproduce them byte
-for byte. CI checks the formatting and runs `cargo clippy` (with and without the
-feature `plots`) and the tests with all features on stable Rust, and the
-tests with all features on Rust 1.88.
+for byte. The other files of reference values in `tests/data` are written
+by the independent translations `calibration_reference.py`,
+`evaluation_reference.py` and `analysis_reference.py` there (see
+[`tests/data/README.md`](tests/data/README.md)). CI checks the formatting
+and runs `cargo clippy` (with and without the feature `plots`) and the
+tests with all features on stable Rust, and the tests with all features on
+Rust 1.88.
 
 Each example was run (those of `analysis/` with the calibration objects of
 Austria, Italy and Spain of the Zenodo record, the two
@@ -811,7 +847,7 @@ not run them, and their output is not compared with that of Julia.
 | `src/extension.rs` | model types: `src/model_init/object_macro.jl` and methods per model type |
 | `src/params.rs` | the inputs and `src/model_init/init_properties.jl` |
 | `src/agents.rs` | `src/model_init/`, `src/utils/modify.jl` |
-| `src/firms.rs` | `src/agent_actions/firms.jl`, `finance_insolvent_firms!` |
+| `src/firms.rs` | `src/agent_actions/firms.jl` |
 | `src/households.rs` | `src/agent_actions/households.jl` |
 | `src/bank.rs` | `src/agent_actions/bank.jl`, `central_bank.jl` |
 | `src/government.rs` | `src/agent_actions/government.jl` |
@@ -867,11 +903,17 @@ form.
 
 Apache License 2.0, like BeforeIT.jl; see [`LICENSE`](LICENSE). The port is a
 derivative work of BeforeIT.jl, Copyright 2024 Banca d'Italia and the authors;
-see [`NOTICE`](NOTICE). The files in `data` and `tests/data` are converted
-from files of BeforeIT.jl, except the reference values of the calibration
-test, which `tests/data/calibration_reference.py` computes from
-`data/italy/calibration.json`. The online appendix of the paper (CC BY-NC-ND 4.0) is cited by
-its equation and table numbers; its text is not reproduced.
+see [`NOTICE`](NOTICE). The data sets in `data` and the MATLAB and
+prediction-pipeline reference values in `tests/data` are converted from
+files of BeforeIT.jl. The reference values in `tests/data` for the
+calibration, forecast-evaluation and error-table tests are written by
+Python scripts there: `calibration_reference.py` from
+`data/italy/calibration.json`,
+`evaluation_reference.py` from pseudo-random inputs it generates, and
+`analysis_reference.py` from the predictions the port writes in
+`tests/analysis.rs` and from `data/italy/calibration.json`; see
+`tests/data/README.md`. The online appendix of the paper (CC BY-NC-ND 4.0)
+is cited by its equation and table numbers; its text is not reproduced.
 
 The disclaimer of BeforeIT.jl applies to the model: "All views expressed are
 personal views, and do not necessarily reflect the official policy or
@@ -883,5 +925,10 @@ committees."
 The model is the work of Sebastian Poledna, Michael Gregor Miess, Cars Hommes
 and Katrin Rabitsch; BeforeIT.jl is the work of its authors listed in its
 README. This port was written with the help of Claude Code, an AI coding
-assistant. Every rule was translated from the Julia source and is checked
-against the reference values described under [Verification](#verification).
+assistant. Every rule was translated from the Julia source. The tests
+described under [Verification](#verification) check the port against the
+reference values in BeforeIT.jl's tests (from the authors' MATLAB code and
+from Julia) and against independent re-computations. The rules that the
+model extensions CANVAS and growth-rate model add are checked only for
+consistency, because BeforeIT.jl's tests have no reference values for them
+(`test/model_extensions.jl` is only a smoke test).

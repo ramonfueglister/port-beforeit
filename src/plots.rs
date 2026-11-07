@@ -1122,8 +1122,8 @@ fn runs(n: usize, keep: impl Fn(usize) -> bool) -> Vec<std::ops::Range<usize>> {
 }
 
 /// A tick label: as `plotters` writes it, or with a power of ten
-/// (`3.95e11`) for magnitudes from 10^5 on and below 10^-4, whose digits
-/// would not fit beside the axis.
+/// (`3.95e11`) for magnitudes from 10^5 on and nonzero magnitudes below
+/// 10^-4, whose digits would not fit beside the axis.
 fn short_number(v: &f64) -> String {
     let a = v.abs();
     if a == 0.0 || (1e-4..1e5).contains(&a) {
@@ -2233,6 +2233,7 @@ mod tests {
         assert!(l.to_svg(DEFAULT_SIZE).unwrap().contains("<circle"));
         assert_eq!(short_number(&395e9), "3.95e11");
         assert_eq!(short_number(&2.5e-5), "2.5e-5");
+        assert_eq!(short_number(&0.0), "0.0");
         // Rotated tick labels of two lines, as SVG text.
         let mut r = Plot::heatmap(vec![vec![1.0, 2.0]], Gradient::YlOrRd);
         r.x_ticks = Some((vec![1.0, 2.0], vec!["Real\nGDP".into(), "Euribor".into()]));

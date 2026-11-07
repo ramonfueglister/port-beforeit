@@ -4,7 +4,9 @@
 //! A shock changes the model in every quarter right after the central bank
 //! has set the policy rate, where `step!` calls `shock!(model)`. A Julia
 //! shock is a callable struct; here it is a type that implements [`Shock`].
-//! Closures `|m: &mut Model| { ... }` are shocks as well.
+//! Closures `|m: &mut Model| { ... }` that implement `Fn(&mut Model)`, that
+//! is, return `()` and neither move out of the variables they capture nor
+//! need `&mut` access to them, are shocks as well.
 
 use crate::random::Randomness;
 use crate::{AbstractModel, Extension, Model};

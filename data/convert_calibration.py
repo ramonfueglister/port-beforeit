@@ -3,7 +3,7 @@ that `CalibrationData::from_json` reads.
 
 Usage:
   python3 convert_calibration.py italy <BeforeIT.jl checkout> <output file>
-      BeforeIT's ITALY_CALIBRATION, the four files of its folder
+      BeforeIT's ITALY_CALIBRATION, the four JLD2 files of its folder
       data/italy/calibration with the dates of
       src/utils/standard_calibration_data.jl.
   python3 convert_calibration.py zenodo <XX_calibration_object.jld2> <output file>

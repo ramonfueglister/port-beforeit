@@ -12,7 +12,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use crate::estimate::{estimate_for_calibration_script, estimate_taylor_rule};
+use crate::estimate::{
+    estimate_for_calibration_script, estimate_taylor_rule, taylor_rule_regressor_is_nan,
+};
 use crate::julia::{matlab_round, max, min, neg, pos, sum};
 use crate::params::{InitialConditions, Parameters};
 
@@ -484,9 +486,10 @@ impl<'a> Tab<'a> {
             .ok_or_else(|| format!("{}[\"{key}\"] is missing", self.name))
     }
 
-    /// Entry `i` (linear index from 1). Where Julia would compute with
-    /// `missing` and fail later, this is an error.
-    fn num(&self, key: &str, i: usize) -> Result<f64, String> {
+    /// Entry `i` (linear index from 1), `None` for `missing`. An error only
+    /// for a missing series (Julia's `KeyError`) or an index outside it
+    /// (Julia's `BoundsError`).
+    fn entry(&self, key: &str, i: usize) -> Result<Option<f64>, String> {
         let a = self.get(key)?;
         match i.checked_sub(1).and_then(|k| a.data.get(k)) {
             None => Err(format!(
@@ -494,9 +497,15 @@ impl<'a> Tab<'a> {
                 self.name,
                 a.len()
             )),
-            Some(None) => Err(format!("{}[\"{key}\"][{i}] is missing", self.name)),
-            Some(Some(x)) => Ok(*x),
+            Some(x) => Ok(*x),
         }
+    }
+
+    /// Entry `i` (linear index from 1). Where Julia would compute with
+    /// `missing` and fail later, this is an error.
+    fn num(&self, key: &str, i: usize) -> Result<f64, String> {
+        self.entry(key, i)?
+            .ok_or_else(|| format!("{}[\"{key}\"][{i}] is missing", self.name))
     }
 
     /// Julia `d[key][a:b]`.
@@ -578,11 +587,55 @@ fn deflator(t: Tab, i: usize) -> Result<f64, String> {
     Ok(t.num("nominal_gdp_quarterly", i)? / t.num("real_gdp_quarterly", i)?)
 }
 
-/// `diff(log.(x))`.
-fn diff_log(x: &[f64]) -> Vec<f64> {
-    x.windows(2)
-        .map(|w| libm::log(w[1]) - libm::log(w[0]))
-        .collect()
+/// [`deflator`] with `None` where either series is `missing`, as Julia's
+/// ratio is then `missing`.
+fn deflator_entry(t: Tab, i: usize) -> Result<Option<f64>, String> {
+    Ok(
+        match (
+            t.entry("nominal_gdp_quarterly", i)?,
+            t.entry("real_gdp_quarterly", i)?,
+        ) {
+            (Some(n), Some(r)) => Some(n / r),
+            _ => None,
+        },
+    )
+}
+
+/// Julia's `log(x)`, which throws a `DomainError` for a negative `x`
+/// (`-Inf` included): an error there. As in Julia, `log(-0.0)` is `-Inf`
+/// and `log(NaN)` is NaN.
+fn log(x: f64, what: &str) -> Result<f64, String> {
+    if x < 0.0 {
+        Err(format!(
+            "{what}: log of the negative number {x} (Julia throws a DomainError)"
+        ))
+    } else {
+        Ok(libm::log(x))
+    }
+}
+
+/// `log.(x)`, with the error of [`log`] for the first negative entry.
+fn logs(x: &[f64], what: &str) -> Result<Vec<f64>, String> {
+    x.iter().map(|&v| log(v, what)).collect()
+}
+
+/// `diff(log.(x))`, with the error of [`log`] for the first negative entry.
+fn diff_log(x: &[f64], what: &str) -> Result<Vec<f64>, String> {
+    Ok(logs(x, what)?.windows(2).map(|w| w[1] - w[0]).collect())
+}
+
+/// [`estimate_for_calibration_script`], with an error for fewer than two
+/// values, where it panics and Julia's `svd_mx2` throws: in the
+/// calibrations, when the estimation date is not early enough before the
+/// calibration date.
+fn ar1_estimate(y: &[f64], what: &str) -> Result<(f64, f64, f64, Vec<f64>), String> {
+    if y.len() < 2 {
+        return Err(format!(
+            "{what}: fewer than two values for an AR(1) estimate (Julia's svd_mx2 throws; \
+             is estimation_date early enough before calibration_date?)"
+        ));
+    }
+    Ok(estimate_for_calibration_script(y))
 }
 
 /// Julia `replace!(v, NaN => 0.0)`.
@@ -635,9 +688,52 @@ fn counts(v: &[f64], what: &str) -> Result<Vec<usize>, String> {
     v.iter().map(|&x| count(x, what)).collect()
 }
 
-/// `(x .+ 1.0) .^ (1.0 / 4.0) .- 1`: a yearly rate as a quarterly one.
-fn quarterly_rate(x: f64) -> f64 {
-    libm::pow(x + 1.0, 1.0 / 4.0) - 1.0
+/// The error of the calibrations for a NaN among the regressors of the
+/// Taylor rule, where Julia's LAPACK call `dgesdd` rejects it and Julia
+/// throws.
+const TAYLOR_RULE_NAN: &str =
+    "a regressor of the Taylor rule is NaN (LAPACK's dgesdd rejects it and Julia throws)";
+
+/// `(x .+ 1.0) .^ (1.0 / 4.0) .- 1`: a yearly rate as a quarterly one. An
+/// error if `x + 1` is negative, where Julia's `^` throws a `DomainError`.
+fn quarterly_rate(x: f64, what: &str) -> Result<f64, String> {
+    let base = x + 1.0;
+    if base < 0.0 {
+        Err(format!(
+            "{what}: the fourth root of the negative number {base} (Julia's ^ throws a DomainError)"
+        ))
+    } else {
+        Ok(libm::pow(base, 1.0 / 4.0) - 1.0)
+    }
+}
+
+/// `t["nominal_gdp_quarterly"] ./ t["real_gdp_quarterly"]`, with which
+/// both calibrations of BeforeIT.jl begin: an error if a series is missing
+/// (Julia throws a `KeyError`) or the two differ in size apart from
+/// trailing dimensions of length 1 (Julia throws a `DimensionMismatch` or,
+/// where one can be broadcast over the other, divides by it, which the
+/// port does not do).
+fn check_deflator_sizes(t: Tab) -> Result<(), String> {
+    let (nominal, real) = (
+        t.get("nominal_gdp_quarterly")?,
+        t.get("real_gdp_quarterly")?,
+    );
+    let trimmed = |a: &Array| -> Vec<usize> {
+        let mut size = a.size.clone();
+        while size.last() == Some(&1) {
+            size.pop();
+        }
+        size
+    };
+    if trimmed(nominal) == trimmed(real) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: nominal_gdp_quarterly and real_gdp_quarterly have the sizes {:?} and {:?} \
+             (Julia throws a DimensionMismatch or broadcasts one over the other)",
+            t.name, nominal.size, real.size
+        ))
+    }
 }
 
 /// The calendar date of quarter `q` of year `y`, as BeforeIT forms it:
@@ -731,9 +827,24 @@ pub fn get_valid_calibration_quarters(
 /// Both formats of BeforeIT.jl's calibration data are read: that of
 /// [`ITALY_CALIBRATION`] and that of the Zenodo record (wages, fixed assets
 /// and capital consumption by industry, quarterly interest and deficit
-/// series, census counts of unemployed and inactive persons). Where Julia
-/// would carry a `missing` value into the result, or fails because a date
-/// is not in the data, this returns an error.
+/// series, census counts of unemployed and inactive persons).
+///
+/// Where Julia would carry a `missing` value into the result, this returns
+/// an error, and also in these cases where Julia throws: a date that is
+/// not in the data, an estimation date too close to the calibration date
+/// (an AR(1) estimate on fewer than two values), the logarithm or fourth
+/// root of a negative number, and a NaN regressor of the Taylor rule. It
+/// also returns an error if nominal and real GDP of `data` or `ea` differ
+/// in size apart from trailing dimensions of length 1, where Julia throws
+/// or broadcasts one over the other.
+///
+/// # Panics
+///
+/// Series by industry whose number of rows differs from that of
+/// `figaro["intermediate_consumption"]`, where Julia throws a
+/// `DimensionMismatch`, are not checked: this function then panics (for
+/// example with fewer rows of `figaro["compensation_employees"]`) or
+/// returns a result.
 pub fn get_params_and_initial_conditions(
     calibration_object: &CalibrationData,
     calibration_date: Date,
@@ -757,6 +868,8 @@ pub fn get_params_and_initial_conditions(
         name: "ea",
         t: &co.ea,
     };
+    check_deflator_sizes(data)?;
+    check_deflator_sizes(ea)?;
     let mut warnings = Vec::new();
 
     // ========================= Resolve time indices =========================
@@ -865,7 +978,7 @@ pub fn get_params_and_initial_conditions(
     let mut firms = cd.column("firms", Tc)?;
     let mut employees = cd.column("employees", Tc)?;
     let population = cd.num("population", Tc)?;
-    let r_bar = quarterly_rate(data.num("euribor", Tx)?);
+    let r_bar = quarterly_rate(data.num("euribor", Tx)?, "data[\"euribor\"]")?;
 
     let omega = 0.85;
 
@@ -1106,8 +1219,8 @@ pub fn get_params_and_initial_conditions(
     let c_E_g = shares(&net_exports);
     let c_I_g = shares(&imports);
 
-    // Parameters.
-    let T_prime = Tx - Te + 1;
+    // Parameters (`T_prime = Tx - Te + 1` below, after the estimates,
+    // which return an error unless Te < Tx).
     let T = 12;
     let T_max = T as i64 - 0.max(Tx as i64 + T as i64 - T_calibration_exo_max as i64);
     let firms_total = sum(&firms);
@@ -1178,18 +1291,25 @@ pub fn get_params_and_initial_conditions(
     let ea_deflator = (Te - 1..=Tx)
         .map(|i| deflator(ea, i))
         .collect::<Result<Vec<_>, _>>()?;
-    let ea_inflation = diff_log(&ea_deflator);
-    let (alpha_pi_EA, beta_pi_EA, sigma_pi_EA, _) = estimate_for_calibration_script(&ea_inflation);
+    let ea_inflation = diff_log(&ea_deflator, "ea[\"gdp_deflator_quarterly\"]")?;
+    let (alpha_pi_EA, beta_pi_EA, sigma_pi_EA, _) =
+        ar1_estimate(&ea_inflation, "euro area inflation")?;
     let a1: Vec<f64> = data
         .range("euribor", Te, Tx)?
         .into_iter()
-        .map(quarterly_rate)
-        .collect();
+        .map(|x| quarterly_rate(x, "data[\"euribor\"]"))
+        .collect::<Result<_, _>>()?;
     let a2: Vec<f64> = ea_inflation.iter().map(|&x| libm::exp(x) - 1.0).collect();
-    let a3: Vec<f64> = diff_log(&ea.range("real_gdp_quarterly", Te - 1, Tx)?)
-        .iter()
-        .map(|&x| libm::exp(x) - 1.0)
-        .collect();
+    let a3: Vec<f64> = diff_log(
+        &ea.range("real_gdp_quarterly", Te - 1, Tx)?,
+        "ea[\"real_gdp_quarterly\"]",
+    )?
+    .iter()
+    .map(|&x| libm::exp(x) - 1.0)
+    .collect();
+    if taylor_rule_regressor_is_nan(&a1, &a2, &a3) {
+        return Err(TAYLOR_RULE_NAN.into());
+    }
     let (rho, r_star, xi_pi, xi_gamma, pi_star) = estimate_taylor_rule(&a1, &a2, &a3);
 
     // Level series of government consumption, exports and imports.
@@ -1205,22 +1325,27 @@ pub fn get_params_and_initial_conditions(
     let E_est_levels = levels(sum(&net_exports), "real_exports_quarterly")?;
     let I_est_levels = levels(sum(&imports), "real_imports_quarterly")?;
     let Y_EA_series_raw = ea.range("real_gdp_quarterly", Te, Tx)?;
-    let log = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| libm::log(x)).collect() };
     // The euro area always uses logarithms, consistent with the Taylor rule.
-    let (alpha_Y_EA, beta_Y_EA, sigma_Y_EA, epsilon_Y_EA) =
-        estimate_for_calibration_script(&log(&Y_EA_series_raw));
-    let estimate = |v: &[f64]| {
+    let (alpha_Y_EA, beta_Y_EA, sigma_Y_EA, epsilon_Y_EA) = ar1_estimate(
+        &logs(&Y_EA_series_raw, "ea[\"real_gdp_quarterly\"]")?,
+        "euro area GDP",
+    )?;
+    type Estimate = ((f64, f64, f64, Vec<f64>), Option<f64>);
+    let estimate = |v: &[f64], what: &str| -> Result<Estimate, String> {
         if use_growth_rate_ar1 {
-            let growth = diff_log(v);
-            let last = growth.last().copied().unwrap_or(f64::NAN);
-            (estimate_for_calibration_script(&growth), Some(last))
+            let growth = diff_log(v, what)?;
+            let estimate = ar1_estimate(&growth, what)?;
+            Ok((estimate, growth.last().copied()))
         } else {
-            (estimate_for_calibration_script(&log(v)), None)
+            Ok((ar1_estimate(&logs(v, what)?, what)?, None))
         }
     };
-    let ((alpha_G, beta_G, sigma_G, _), g_G) = estimate(&G_est_levels);
-    let ((alpha_E, beta_E, sigma_E, epsilon_E), g_E) = estimate(&E_est_levels);
-    let ((alpha_I, beta_I, sigma_I, epsilon_I), g_I) = estimate(&I_est_levels);
+    let ((alpha_G, beta_G, sigma_G, _), g_G) =
+        estimate(&G_est_levels, "the level of government consumption")?;
+    let ((alpha_E, beta_E, sigma_E, epsilon_E), g_E) =
+        estimate(&E_est_levels, "the level of exports")?;
+    let ((alpha_I, beta_I, sigma_I, epsilon_I), g_I) =
+        estimate(&I_est_levels, "the level of imports")?;
     // On growth rates the residuals are one shorter.
     let epsilon_Y_EA = if use_growth_rate_ar1 {
         &epsilon_Y_EA[1..]
@@ -1228,6 +1353,7 @@ pub fn get_params_and_initial_conditions(
         &epsilon_Y_EA[..]
     };
     let C = cov3(epsilon_Y_EA, &epsilon_E, &epsilon_I);
+    let T_prime = Tx - Te + 1;
 
     // ================ Pack params & initial_conditions output ================
     let parameters = Parameters {
@@ -1322,7 +1448,7 @@ pub fn get_params_and_initial_conditions(
     let data_deflator = (Te - 1..=Tx)
         .map(|i| deflator(data, i))
         .collect::<Result<Vec<_>, _>>()?;
-    let pi = diff_log(&data_deflator);
+    let pi = diff_log(&data_deflator, "data[\"gdp_deflator_quarterly\"]")?;
     let Y_EA = ea.num("real_gdp_quarterly", Tx)?;
     if Tx < 2 {
         return Err("calibration_date is the first quarter of data[\"quarters_num\"]".into());
@@ -1394,6 +1520,26 @@ pub fn get_params_and_initial_conditions(
 /// It needs the format of [`ITALY_CALIBRATION`]. As in BeforeIT.jl, it
 /// takes the year as the row index of the first match in `years_num`,
 /// which for that format is always 1, the first year of the tables.
+///
+/// In these cases where Julia throws, this returns an error, also in the
+/// estimates that the steady state then replaces: a date that is not in
+/// the data, a `missing` value of the data in an AR(1) estimate or among
+/// the regressors of the Taylor rule, an estimation date too close to the
+/// calibration date, the logarithm or fourth root of a negative number,
+/// and a NaN regressor of the Taylor rule. Where Julia would carry a
+/// `missing` value into the result, this returns an error too, but not for
+/// a value that Julia only reads, or uses without throwing (the Euribor
+/// rate at the calibration date), before the steady state replaces it. As
+/// the full calibration, it returns an error if nominal and real GDP
+/// differ in size apart from trailing dimensions of length 1.
+///
+/// # Panics
+///
+/// Series by industry whose number of rows differs from that of
+/// `figaro["intermediate_consumption"]`, where Julia throws a
+/// `DimensionMismatch`, are not checked: this function then panics (for
+/// example with fewer rows of `figaro["compensation_employees"]`) or
+/// returns a result.
 #[allow(clippy::too_many_arguments)]
 pub fn get_params_and_initial_conditions_steady_state(
     calibration_date: Date,
@@ -1418,6 +1564,8 @@ pub fn get_params_and_initial_conditions_steady_state(
         t: data,
     };
     let ea = Tab { name: "ea", t: ea };
+    check_deflator_sizes(data)?;
+    check_deflator_sizes(ea)?;
     let index = |v: Vec<usize>, k: usize, what: &str| -> Result<usize, String> {
         v.get(k - 1).copied().ok_or_else(|| {
             format!(
@@ -1464,10 +1612,13 @@ pub fn get_params_and_initial_conditions_steady_state(
     let operating_surplus = figaro.column("operating_surplus", Tc)?;
     let firm_cash_quarterly = cd.num("firm_cash_quarterly", Tq)?;
     let firm_debt_quarterly = cd.num("firm_debt_quarterly", Tq)?;
-    cd.num("firm_interest", Tc)?;
+    // Values that the steady state replaces: Julia throws only for a
+    // missing series or an index outside it, not where the value is
+    // `missing`.
+    cd.entry("firm_interest", Tc)?;
     let firm_interest = 0.0; // STEADY-STATE
     let government_debt_quarterly = cd.num("government_debt_quarterly", Tq)?;
-    cd.num("interest_government_debt", Tc)?;
+    cd.entry("interest_government_debt", Tc)?;
     let interest_government_debt = 0.0; // STEADY-STATE
     let government_consumption = figaro.column("government_consumption", Tc)?;
     let social_benefits = cd.num("social_benefits", Tc)?;
@@ -1485,12 +1636,14 @@ pub fn get_params_and_initial_conditions_steady_state(
     let taxes_products_government = figaro.num("taxes_products_government", Tc)?;
     let bank_equity_quarterly = cd.num("bank_equity_quarterly", Tq)?;
     let taxes_products = figaro.column("taxes_products", Tc)?;
-    cd.num("government_deficit", Tc)?;
+    cd.entry("government_deficit", Tc)?;
     let government_deficit = 0.0; // STEADY-STATE
     let mut firms = cd.column("firms", Tc)?;
     let mut employees = cd.column("employees", Tc)?;
     let population = cd.num("population", Tc)?;
-    data.num("euribor", Tx)?;
+    if let Some(x) = data.entry("euribor", Tx)? {
+        quarterly_rate(x, "data[\"euribor\"]")?;
+    }
     let r_bar = 0.0; // STEADY-STATE
     let omega = 0.85;
     let fixed_assets = cd.num("fixed_assets", Tc)?;
@@ -1652,7 +1805,8 @@ pub fn get_params_and_initial_conditions_steady_state(
     let c_E_g = shares(&net_exports);
     let c_I_g = shares(&imports);
 
-    let T_prime = Tx - Te + 1;
+    // `T_prime = Tx - Te + 1` below, after the estimates, which return an
+    // error unless Te < Tx.
     let T = 12;
     let T_max = T as i64 - 0.max(Tx as i64 + T as i64 - T_calibration_exo_max as i64);
     let firms_total = sum(&firms);
@@ -1694,20 +1848,77 @@ pub fn get_params_and_initial_conditions_steady_state(
     let theta_UB = 0.55 * (1.0 - tau_INC) * (1.0 - tau_SIW);
 
     // The estimates of BeforeIT.jl, which are then replaced by the steady
-    // state; computed for the errors that missing data give.
+    // state; computed for the errors that Julia gives: missing data, the
+    // logarithm or fourth root of a negative number, an AR(1) estimate on
+    // fewer than two values or a NaN regressor of the Taylor rule.
     let ea_deflator = (Te - 1..=Tx)
         .map(|i| deflator(ea, i))
         .collect::<Result<Vec<_>, _>>()?;
-    ea.range("real_gdp_quarterly", Te - 1, Tx)?;
-    data.range("euribor", Te, Tx)?;
-    for key in [
-        "real_government_consumption_quarterly",
-        "real_exports_quarterly",
-        "real_imports_quarterly",
-    ] {
-        data.range(key, Te, Tx)?;
+    let ea_inflation = diff_log(&ea_deflator, "ea[\"gdp_deflator_quarterly\"]")?;
+    ar1_estimate(&ea_inflation, "euro area inflation")?;
+    ar1_estimate(
+        &logs(
+            &ea.range("real_gdp_quarterly", Te, Tx)?,
+            "ea[\"real_gdp_quarterly\"]",
+        )?,
+        "euro area GDP",
+    )?;
+    // Julia's Taylor rule uses the last rate only on the left-hand side,
+    // where `missing` gives `missing` estimates, which the steady state
+    // replaces, but no error; NaN stands for it here.
+    let euribor = (Te..=Tx)
+        .map(|i| data.entry("euribor", i))
+        .collect::<Result<Vec<_>, _>>()?;
+    let a1: Vec<f64> = euribor
+        .iter()
+        .map(|x| x.map_or(Ok(f64::NAN), |x| quarterly_rate(x, "data[\"euribor\"]")))
+        .collect::<Result<_, _>>()?;
+    let a2: Vec<f64> = ea_inflation.iter().map(|&x| libm::exp(x) - 1.0).collect();
+    let a3: Vec<f64> = diff_log(
+        &ea.range("real_gdp_quarterly", Te - 1, Tx)?,
+        "ea[\"real_gdp_quarterly\"]",
+    )?
+    .iter()
+    .map(|&x| libm::exp(x) - 1.0)
+    .collect();
+    if let Some(k) = euribor[..euribor.len() - 1]
+        .iter()
+        .position(Option::is_none)
+    {
+        return Err(format!(
+            "data[\"euribor\"][{}] is missing (Julia's estimate of the Taylor rule throws)",
+            Te + k
+        ));
     }
-    drop(ea_deflator);
+    if taylor_rule_regressor_is_nan(&a1, &a2, &a3) {
+        return Err(TAYLOR_RULE_NAN.into());
+    }
+    for (total, key, what) in [
+        (
+            gc_total,
+            "real_government_consumption_quarterly",
+            "the level of government consumption",
+        ),
+        (
+            sum(&net_exports),
+            "real_exports_quarterly",
+            "the level of exports",
+        ),
+        (
+            sum(&imports),
+            "real_imports_quarterly",
+            "the level of imports",
+        ),
+    ] {
+        let last = data.num(key, Tx)?;
+        let levels: Vec<f64> = data
+            .range(key, Te, Tx)?
+            .iter()
+            .map(|x| timescale * total * x / last)
+            .collect();
+        logs(&levels, what)?;
+    }
+    let T_prime = Tx - Te + 1;
 
     let parameters = Parameters {
         G,
@@ -1806,6 +2017,18 @@ pub fn get_params_and_initial_conditions_steady_state(
         ));
         Ok(v)
     };
+    // Julia's history of GDP and inflation before the steady state replaces
+    // it: errors for an index outside the series and for the logarithm of
+    // a negative deflator, but not for `missing`.
+    for i in Te..=Tx {
+        data.entry("real_gdp_quarterly", i)?;
+    }
+    let data_deflator = (Te - 1..=Tx)
+        .map(|i| deflator_entry(data, i))
+        .collect::<Result<Vec<_>, _>>()?;
+    for x in data_deflator.into_iter().flatten() {
+        log(x, "data[\"gdp_deflator_quarterly\"]")?;
+    }
     let initial_conditions = InitialConditions {
         D_I,
         L_I,

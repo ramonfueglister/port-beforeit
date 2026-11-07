@@ -394,9 +394,16 @@ fn last_day_of_month(y: i32, m: i64) -> Date {
 /// on the data first.
 ///
 /// Returns an error if a series is missing in `real_data` or in the
-/// simulations, if a value at the start date is missing or not unique, or
-/// if the forecast quarters of whole years are not a multiple of four
-/// (Julia throws in these cases).
+/// simulations, or if the forecast quarters of whole years are not a
+/// multiple of four (Julia throws in these cases), and also unless exactly
+/// one non-missing value of a series is found at the start date (quarterly
+/// series, `quarters_num`) or at 31 December of its year (yearly series,
+/// `years_num`). In that case Julia either throws (a `missing` value of
+/// `{var}_quarterly` makes `toannual` fail when the forecasts contain a
+/// whole calendar year; with a horizon of two or more quarters, a number of
+/// `quarters_num` matches other than one or the horizon makes the broadcast
+/// in `compound_quarterly` fail) or puts `missing`, several values or no
+/// value at the start of the series.
 pub fn get_predictions_from_sims(
     sims: &DataVector,
     real_data: &Table,

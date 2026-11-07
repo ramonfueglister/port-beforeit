@@ -93,8 +93,9 @@ fn calibrate(date: &str, scale: f64, growth: bool) -> Calibration {
 
 #[test]
 fn italy_agrees_with_the_numpy_translation() {
-    // 2019-12-31 lies after the last quarter of the time series plus
-    // T = 12 quarters: T_max = 0 and the histories end in NaN.
+    // 2019-12-31 is the last quarter of the time series, so the T = 12
+    // quarters after it are missing: T_max = 0 and the histories C_G, C_E
+    // and Y_I end in NaN.
     for (file, date, growth) in [
         ("calibration_italy_2010-03-31", "2010-03-31", false),
         ("calibration_italy_2019-12-31_growth", "2019-12-31", true),
@@ -285,4 +286,127 @@ fn zenodo_calibration_objects() {
             get_params_and_initial_conditions(&co, Date::new(1900, 1, 1), 0.001, false).is_err()
         );
     }
+}
+
+/// The index (from 1) of `date` in `data["quarters_num"]`.
+fn quarter_index(co: &CalibrationData, date: Date) -> usize {
+    co.data["quarters_num"]
+        .data
+        .iter()
+        .position(|q| *q == Some(date.datenum()))
+        .unwrap()
+        + 1
+}
+
+/// Both calibrations, the full one without and with growth rates.
+fn calibrations(co: &CalibrationData, date: Date) -> [Result<(), String>; 3] {
+    let steady = get_params_and_initial_conditions_steady_state(
+        date,
+        &co.calibration,
+        &co.figaro,
+        &co.data,
+        &co.ea,
+        co.max_calibration_date,
+        co.estimation_date,
+        0.001,
+    );
+    [
+        get_params_and_initial_conditions(co, date, 0.001, false).map(|_| ()),
+        get_params_and_initial_conditions(co, date, 0.001, true).map(|_| ()),
+        steady.map(|_| ()),
+    ]
+}
+
+/// Where Julia throws in the estimates, also in those that the steady state
+/// replaces, the calibrations return errors.
+#[test]
+fn errors_where_julia_throws_in_the_estimates() {
+    let date = Date::new(2010, 3, 31);
+    // An estimation date at or after the calibration date leaves fewer than
+    // two values for the AR(1) estimates (Julia's svd_mx2 throws); one
+    // quarter before, only the growth rates are too few.
+    for (estimation_date, ok) in [
+        (Date::new(2009, 12, 31), [true, false, true]),
+        (date, [false; 3]),
+        (Date::new(2011, 6, 30), [false; 3]),
+    ] {
+        let mut co = (*ITALY_CALIBRATION).clone();
+        co.estimation_date = estimation_date;
+        for (r, ok) in calibrations(&co, date).into_iter().zip(ok) {
+            assert_eq!(r.is_ok(), ok, "{estimation_date:?}: {r:?}");
+            if let Err(e) = r {
+                assert!(e.contains("svd_mx2"), "{e}");
+            }
+        }
+    }
+    // The fourth root of a negative 1 + euribor at the calibration date,
+    // and the logarithm of a negative real GDP of the euro area in the
+    // quarter before the estimation date, with a negative nominal GDP so
+    // that the deflator stays positive (Julia throws DomainErrors).
+    let Tx = quarter_index(&ITALY_CALIBRATION, date);
+    let Te = quarter_index(&ITALY_CALIBRATION, ITALY_CALIBRATION.estimation_date);
+    for (table, key, i) in [
+        ("data", "euribor", Tx),
+        ("ea", "real_gdp_quarterly", Te - 1),
+    ] {
+        let mut co = (*ITALY_CALIBRATION).clone();
+        let t = if table == "data" {
+            &mut co.data
+        } else {
+            &mut co.ea
+        };
+        t.get_mut(key).unwrap().data[i - 1] = Some(-2.0);
+        if key == "real_gdp_quarterly" {
+            co.ea.get_mut("nominal_gdp_quarterly").unwrap().data[i - 1] = Some(-2.0);
+        }
+        for r in calibrations(&co, date) {
+            let e = r.unwrap_err();
+            assert!(
+                e.contains("DomainError") && e.contains(&format!("[\"{key}\"]")),
+                "{e}"
+            );
+        }
+    }
+    // Nominal and real GDP of different sizes (a DimensionMismatch).
+    let mut co = (*ITALY_CALIBRATION).clone();
+    co.ea.get_mut("real_gdp_quarterly").unwrap().data.pop();
+    co.ea.get_mut("real_gdp_quarterly").unwrap().size =
+        vec![co.ea["real_gdp_quarterly"].data.len()];
+    for r in calibrations(&co, date) {
+        assert!(r.unwrap_err().contains("DimensionMismatch"));
+    }
+}
+
+/// A `missing` value that Julia reads only before the steady state replaces
+/// it is no error, and the result is unchanged.
+#[test]
+fn steady_state_ignores_missing_values_it_replaces() {
+    let date = Date::new(2010, 3, 31);
+    let steady = |co: &CalibrationData| {
+        get_params_and_initial_conditions_steady_state(
+            date,
+            &co.calibration,
+            &co.figaro,
+            &co.data,
+            &co.ea,
+            co.max_calibration_date,
+            co.estimation_date,
+            0.001,
+        )
+    };
+    let reference = steady(&ITALY_CALIBRATION).unwrap();
+    let mut co = (*ITALY_CALIBRATION).clone();
+    for key in [
+        "firm_interest",
+        "interest_government_debt",
+        "government_deficit",
+    ] {
+        // The first year, as the steady state takes it for this format.
+        co.calibration.get_mut(key).unwrap().data[0] = None;
+    }
+    let Tx = quarter_index(&co, date);
+    co.data.get_mut("euribor").unwrap().data[Tx - 1] = None;
+    assert_eq!(steady(&co).unwrap(), reference);
+    // The full calibration carries these values into its parameters.
+    assert!(get_params_and_initial_conditions(&co, date, 0.001, false).is_err());
 }

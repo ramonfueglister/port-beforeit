@@ -1165,30 +1165,51 @@ pub enum Source {
 }
 
 /// A variable of the error tables, Julia's named tuple `(key, transform,
-/// source)`: the key of the series, the transformation of its values and
-/// whose data it is.
+/// source)`: the key of the series, the transformation of its values, which
+/// returns an error where Julia's function throws, and whose data it is.
 #[derive(Clone, Copy, Debug)]
 pub struct VarSpec {
     pub key: &'static str,
-    pub transform: fn(f64) -> f64,
+    pub transform: fn(f64) -> Result<f64, String>,
     pub source: Source,
 }
 
-fn log(x: f64) -> f64 {
-    libm::log(x)
+/// `log`: an error for a negative number (`-Inf` included), where Julia
+/// throws a `DomainError`. As in Julia, `log(-0.0)` is `-Inf` and
+/// `log(NaN)` is NaN.
+fn log(x: f64) -> Result<f64, String> {
+    if x < 0.0 {
+        Err(format!(
+            "log of the negative number {x} (Julia throws a DomainError)"
+        ))
+    } else {
+        Ok(libm::log(x))
+    }
 }
 
-/// `x -> log(1 + x)`.
-fn log_one_plus(x: f64) -> f64 {
-    libm::log(1.0 + x)
+/// `x -> log(1 + x)`, with the error of [`log`] if `1 + x` is negative.
+fn log_one_plus(x: f64) -> Result<f64, String> {
+    log(1.0 + x)
 }
 
-/// `x -> (1 + x)^(1 / 4)`.
-fn quarterly_rate(x: f64) -> f64 {
-    libm::pow(1.0 + x, 1.0 / 4.0)
+/// `x -> (1 + x)^(1 / 4)`: an error if `1 + x` is negative, where Julia's
+/// `^` throws a `DomainError`.
+fn quarterly_rate(x: f64) -> Result<f64, String> {
+    let base = 1.0 + x;
+    if base < 0.0 {
+        Err(format!(
+            "the fourth root of the negative number {base} (Julia's ^ throws a DomainError)"
+        ))
+    } else {
+        Ok(libm::pow(base, 1.0 / 4.0))
+    }
 }
 
-const fn spec(key: &'static str, transform: fn(f64) -> f64, source: Source) -> VarSpec {
+const fn spec(
+    key: &'static str,
+    transform: fn(f64) -> Result<f64, String>,
+    source: Source,
+) -> VarSpec {
     VarSpec {
         key,
         transform,
@@ -1293,8 +1314,10 @@ fn table_of<'a>(spec: &VarSpec, data: &'a Table, ea: &'a Table) -> (&'a Table, &
 /// `forecast_quarter_num`. As in Julia, the quarter is looked up in
 /// `data["quarters_num"]` also for the series of the euro area.
 ///
-/// Returns an error if a series is missing, the quarter is not there
-/// exactly once, or its value is missing (Julia throws).
+/// Returns an error where Julia throws, for example if a series is
+/// missing, the quarter is not there exactly once, its value is missing, or
+/// its transformation fails (Julia's `log` and `^` throw a `DomainError`
+/// for a negative number).
 pub fn extract_actual_values(
     data: &Table,
     ea: &Table,
@@ -1307,7 +1330,7 @@ pub fn extract_actual_values(
         .map(|spec| {
             let (src, name) = table_of(spec, data, ea);
             match select(src, name, spec.key, &mask)?[..] {
-                [x] => Ok((spec.transform)(x)),
+                [x] => (spec.transform)(x),
                 ref v => Err(format!(
                     "{name}[\"{}\"] has {} values at date number {forecast_quarter_num}, one is needed",
                     spec.key,
@@ -1325,8 +1348,10 @@ pub fn extract_actual_values(
 /// `forecast_quarter_num`. The series of the euro area are those with
 /// `_ea_quarterly` in place of `_quarterly`.
 ///
-/// Returns an error if a series is missing or is not a `quarters ×
-/// number_of_seeds` matrix (Julia throws).
+/// Returns an error where Julia throws, for example if a series is missing
+/// or is not a `quarters × number_of_seeds` matrix, a value is missing, or
+/// the transformation of the mean fails (Julia's `log` and `^` throw a
+/// `DomainError` for a negative number).
 pub fn extract_abm_forecast(
     model: &Table,
     forecast_quarter_num: f64,
@@ -1366,7 +1391,7 @@ pub fn extract_abm_forecast(
                         .ok_or_else(|| format!("model[\"{key}\"] has a missing value"))
                 })
                 .collect::<Result<Vec<f64>, String>>()?;
-            Ok((spec.transform)(mean(&values)))
+            (spec.transform)(mean(&values))
         })
         .collect()
 }
@@ -1578,21 +1603,24 @@ pub fn error_table_ar(
     let presample = 4;
     let columns = |mask: &[bool]| -> Result<Vec<Vec<Option<f64>>>, String> {
         let logs = |key: &str| -> Result<Vec<Option<f64>>, String> {
-            Ok(select_some(data, "data", key, mask)?
+            select_some(data, "data", key, mask)?
                 .into_iter()
-                .map(|x| x.map(log))
-                .collect())
+                .map(|x| x.map(log).transpose())
+                .collect()
         };
-        let rate: Vec<Option<f64>> = select_some(data, "data", "euribor", mask)?
-            .into_iter()
-            .map(|x| x.map(quarterly_rate))
-            .collect();
+        let rate = || -> Result<Vec<Option<f64>>, String> {
+            select_some(data, "data", "euribor", mask)?
+                .into_iter()
+                .map(|x| x.map(quarterly_rate).transpose())
+                .collect()
+        };
+        // In Julia's order of the columns, for the first error.
         Ok(vec![
             logs("real_gdp_quarterly")?,
             logs("gdp_deflator_quarterly")?,
             logs("real_household_consumption_quarterly")?,
             logs("real_fixed_capitalformation_quarterly")?,
-            cumsum(&rate),
+            cumsum(&rate()?),
         ])
     };
     let forecast =
@@ -1602,7 +1630,7 @@ pub fn error_table_ar(
             let mut Y = vec![vec![0.0; nv]; horizon];
             for l in 0..nv {
                 let column: Vec<Vec<f64>> = Y0_diff.iter().map(|r| vec![r[l]]).collect();
-                let f = forecast_k_steps_VAR(&column, horizon, true, k, None);
+                let f = forecast_k_steps_VAR(&column, horizon, true, k, None)?;
                 for (t, r) in f.iter().enumerate() {
                     Y[t][l] = r[0];
                 }
@@ -1650,9 +1678,11 @@ pub fn error_table_validation_var(
 ) -> Result<(), String> {
     let presample = 4;
     let columns = |mask: &[bool]| -> Result<Vec<Vec<Option<f64>>>, String> {
-        let apply = |t: &Table, name: &str, key: &str, f: fn(f64) -> f64| {
-            select_some(t, name, key, mask)
-                .map(|v| v.into_iter().map(|x| x.map(f)).collect::<Vec<_>>())
+        let apply = |t: &Table, name: &str, key: &str, f: fn(f64) -> Result<f64, String>| {
+            select_some(t, name, key, mask)?
+                .into_iter()
+                .map(|x| x.map(f).transpose())
+                .collect::<Result<Vec<_>, String>>()
         };
         Ok(vec![
             apply(data, "data", "real_gdp_quarterly", log)?,
@@ -1668,7 +1698,7 @@ pub fn error_table_validation_var(
     let forecast =
         |Y0: &[Vec<Option<f64>>], k: usize, horizon: usize| -> Result<Vec<f64>, String> {
             let Y0_diff = differences(Y0, presample - k)?;
-            let Y = forecast_k_steps_VAR(&Y0_diff, horizon, true, k, None);
+            let Y = forecast_k_steps_VAR(&Y0_diff, horizon, true, k, None)?;
             last_forecast(Y0, &Y, &[0, 2, 3, 4, 5])
         };
     error_table_benchmark(
@@ -2013,6 +2043,22 @@ pub fn save_all_predictions_from_sims(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transforms_return_errors_where_julia_throws() {
+        // Julia's `log` and `^` throw DomainErrors for negative numbers,
+        // `-Inf` included; `log(-0.0)` is `-Inf` and NaN stays NaN.
+        assert!(log(-1.0).unwrap_err().contains("DomainError"));
+        assert!(log(f64::NEG_INFINITY).is_err());
+        assert_eq!(log(-0.0), Ok(f64::NEG_INFINITY));
+        assert!(log(f64::NAN).unwrap().is_nan());
+        assert!(log_one_plus(-1.5).is_err());
+        assert_eq!(log_one_plus(-1.0), Ok(f64::NEG_INFINITY));
+        assert!(quarterly_rate(-2.0).unwrap_err().contains("DomainError"));
+        assert_eq!(quarterly_rate(-1.0), Ok(0.0));
+        assert!(quarterly_rate(f64::NAN).unwrap().is_nan());
+        assert_eq!(quarterly_rate(15.0), Ok(2.0));
+    }
 
     #[test]
     fn stars_and_rmse_improvement() {
