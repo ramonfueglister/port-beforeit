@@ -31,9 +31,11 @@
 
 pub mod agents;
 pub mod calibration;
+pub mod correlation;
 pub mod data;
 pub mod datasets;
 pub mod estimate;
+pub mod evaluation;
 pub mod extension;
 pub mod julia;
 pub mod model_extensions;
@@ -41,6 +43,7 @@ pub mod params;
 pub mod predictions;
 pub mod random;
 pub mod shocks;
+pub mod varx;
 
 mod accounting;
 mod aggregates;

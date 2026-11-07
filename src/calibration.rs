@@ -219,6 +219,81 @@ impl Array {
     }
 }
 
+impl Array {
+    /// A vector, `size = [n]`.
+    pub fn vector(x: &[f64]) -> Array {
+        Array {
+            size: vec![x.len()],
+            data: x.iter().map(|&v| Some(v)).collect(),
+        }
+    }
+
+    /// A matrix given by its rows, stored in Julia's column-major order.
+    ///
+    /// # Panics
+    ///
+    /// If the rows have different lengths.
+    pub fn matrix(rows: &[Vec<f64>]) -> Array {
+        let cols = rows.first().map_or(0, |r| r.len());
+        assert!(
+            rows.iter().all(|r| r.len() == cols),
+            "the rows have different lengths"
+        );
+        Array {
+            size: vec![rows.len(), cols],
+            data: (0..cols)
+                .flat_map(|c| rows.iter().map(move |r| Some(r[c])))
+                .collect(),
+        }
+    }
+
+    /// Column `c` (from 0) of a vector (`c = 0`) or matrix.
+    pub fn column(&self, c: usize) -> &[Option<f64>] {
+        let rows = self.size(1);
+        &self.data[c * rows..(c + 1) * rows]
+    }
+}
+
+/// Reads a table written by [`table_to_json`]: a JSON object whose values
+/// are numbers or `{"size": [...], "data": [...]}` as in
+/// [`CalibrationData::from_json`].
+pub fn table_from_json(text: &str) -> Result<Table, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("table: {e}"))?;
+    let o = v.as_object().ok_or("table: not a JSON object")?;
+    o.iter()
+        .map(|(k, v)| Ok((k.clone(), array(v, &format!("[\"{k}\"]"))?)))
+        .collect()
+}
+
+/// Writes a table in the format of the tables of
+/// [`CalibrationData::from_json`]: scalars as numbers, arrays as
+/// `{"size": [...], "data": [...]}` in column-major order, `missing` as
+/// `null` and NaN and infinities as the strings "NaN", "Inf" and "-Inf".
+pub fn table_to_json(t: &Table) -> String {
+    let entry = |x: &Option<f64>| match *x {
+        None => serde_json::Value::Null,
+        Some(v) if v.is_nan() => "NaN".into(),
+        Some(v) if v == f64::INFINITY => "Inf".into(),
+        Some(v) if v == f64::NEG_INFINITY => "-Inf".into(),
+        Some(v) => v.into(),
+    };
+    let o: serde_json::Map<String, serde_json::Value> = t
+        .iter()
+        .map(|(k, a)| {
+            let v = if a.size.is_empty() && a.data.len() == 1 {
+                entry(&a.data[0])
+            } else {
+                serde_json::json!({
+                    "size": a.size,
+                    "data": a.data.iter().map(entry).collect::<Vec<_>>(),
+                })
+            };
+            (k.clone(), v)
+        })
+        .collect();
+    serde_json::Value::Object(o).to_string()
+}
+
 impl CalibrationData {
     /// Reads calibration data in the format of `data/convert_calibration.py`:
     /// a JSON object with the tables `calibration`, `figaro`, `data` and

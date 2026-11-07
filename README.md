@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | Forecast evaluation (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`, `varx.jl`, `correlation_utils.jl`, `analysis_utils.jl`, `error_tables.jl`, `save_all_predictions.jl`), `diff_transform.jl`; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); the tests of forecasts (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`), the VAR benchmarks (`varx.jl`) and the business-cycle statistics (`correlation_utils.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | The forecast error tables (`analysis_utils.jl`, `error_tables.jl`) and the batch runs (`save_all_predictions.jl`), `diff_transform.jl`; the package extensions in `ext/` |
 
 ## Installation
 
@@ -236,6 +236,14 @@ year (yearly). `set_gdp_deflators` stores the GDP deflators in the data as
 BeforeIT's calibration does in the dictionaries it is given; the
 predictions read them.
 
+The module `evaluation` has the Diebold-Mariano test `dmtest_modified`, the
+Mincer-Zarnowitz test `mztest` and `bias_ttest`; `varx` has the VAR and VARX
+benchmarks (`estimate_VAR`, `forecast_k_steps_VAR`, ...); `correlation` has
+`hpfilter`, `cross_correlation`, `auto_correlation` and `correlation_stats`
+for data or for `Predictions::to_table()`. Where BeforeIT.jl reads and
+writes JLD2 files, the port uses JSON (`calibration::table_to_json` and
+`table_from_json`).
+
 `cargo doc --open` shows the documentation of every type and rule.
 
 ## Randomness and reproducibility
@@ -319,12 +327,15 @@ from the `libm` crate, not from the system's math library.
    the GDP deflators in the caller's dictionaries `data` and `ea`; the port
    does not change the calibration data. Dates are calendar days: Julia's
    `num2date` also keeps a time of day, which the calibration never uses.
-8. **Predictions.** `get_predictions_from_sims` returns an error where
-   BeforeIT.jl would throw and also where a value of the data at the start
-   date is `missing` or not unique, which Julia would carry into the
-   forecasts as `missing` or broadcast over several values. The result is a
-   struct with the series as `time × runs` matrices given by their rows
-   (`Predictions`) instead of a dictionary.
+8. **Predictions and evaluation.** `get_predictions_from_sims` returns an
+   error where BeforeIT.jl would throw and also where a value of the data
+   at the start date is `missing` or not unique, which Julia would carry
+   into the forecasts as `missing` or broadcast over several values. The
+   result is a struct with the series as `time × runs` matrices given by
+   their rows (`Predictions`) instead of a dictionary. The tests, VAR
+   forecasts and correlations return errors where Julia throws; the
+   stochastic VAR forecasts draw from a given generator instead of Julia's
+   global one. Files are JSON instead of JLD2.
 
 ## Where BeforeIT.jl differs from the paper
 
@@ -450,6 +461,14 @@ keeps:
   1e-6). With the port's minimum per firm, the predictions differ by up to
   3.2e-5 of a value, and 60 of the 107 keys of the result fail Julia's
   test; the test checks this too.
+- [`tests/evaluation.rs`](tests/evaluation.rs): the tests of forecasts, the
+  VAR and VARX forecasts, the HP filter, the correlations and
+  `correlation_stats` against an independent NumPy/SciPy translation
+  ([`tests/data/evaluation_reference.py`](tests/data/evaluation_reference.py)):
+  within 1e-12 (relative), the HP filter's cycle within 1e-10 (absolute,
+  for series around 100) because LAPACK and the port order the operations
+  of the LU factorization differently. Also the checks of
+  `test/utils/correlation_utils.jl`, and errors where Julia throws.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -497,6 +516,9 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/accounting.rs` | `src/utils/get_accounting_identities.jl` |
 | `src/datasets.rs`, `data/` | `src/utils/standard_params_initial_conditions.jl`, `data/` |
 | `src/predictions.rs` | `src/utils/get_predictions_from_sims.jl`, `toannual.jl` |
+| `src/evaluation.rs` | `src/utils/dmtest.jl`, `mztest.jl`, `bias_ttest.jl`; `mean`, `var`, `cov` of Statistics.jl, `normcdf` of StatsFuns.jl, `gamma_inc` of SpecialFunctions.jl for `a = 1` |
+| `src/varx.rs` | `src/utils/varx.jl` |
+| `src/correlation.rs` | `src/utils/correlation_utils.jl` |
 | `src/calibration.rs`, `data/italy/calibration.json` | `src/utils/calibration.jl`, `_calibration_steady_state.jl`, `standard_calibration_data.jl`, `data/italy/calibration/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/model_extensions/` | `src/model_extensions/` |

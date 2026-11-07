@@ -51,3 +51,19 @@ The translation shares no code with the port, so the comparison in
 does not check against values of Julia. `tests/predictions.rs` does, for
 one calibration (2010Q1, scale 0.0001), through the model runs and
 predictions that follow it.
+
+## Reference values of the forecast evaluation
+
+`evaluation_reference.json` holds pseudo-random inputs and the results of
+`evaluation_reference.py`, an independent NumPy/SciPy translation of
+BeforeIT's `dmtest.jl`, `mztest.jl`, `bias_ttest.jl`, `varx.jl` and
+`correlation_utils.jl` (SciPy's normal and χ² distributions, NumPy's
+`linalg` for the HP filter and least squares):
+
+```sh
+python3 tests/data/evaluation_reference.py tests/data/evaluation_reference.json
+```
+
+`tests/evaluation.rs` compares the port with it. As for the calibration,
+this checks that both read the Julia code the same way, not against values
+of Julia.

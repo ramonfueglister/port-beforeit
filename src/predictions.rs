@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::calibration::{Date, Table};
+use crate::calibration::{Array, Date, Table};
 use crate::data::DataVector;
 use crate::julia::{powi, sum};
 
@@ -28,6 +28,59 @@ pub struct Predictions {
     /// `predictions_dict["years_num"]`: the MATLAB date numbers of the years
     /// of the yearly series (31 December).
     pub years_num: Vec<f64>,
+}
+
+impl Predictions {
+    /// The predictions as a table like BeforeIT's `predictions_dict`: each
+    /// series a `time × runs` matrix, `quarters_num` and `years_num`
+    /// vectors.
+    pub fn to_table(&self) -> Table {
+        let mut t: Table = self
+            .series
+            .iter()
+            .map(|(k, m)| (k.clone(), Array::matrix(m)))
+            .collect();
+        t.insert("quarters_num".into(), Array::vector(&self.quarters_num));
+        t.insert("years_num".into(), Array::vector(&self.years_num));
+        t
+    }
+
+    /// The predictions from a table written by [`Predictions::to_table`].
+    ///
+    /// Returns an error if `quarters_num` or `years_num` is missing, a
+    /// series is not a matrix, or an entry is `missing`.
+    pub fn from_table(t: &Table) -> Result<Predictions, String> {
+        let numbers = |key: &str, a: &Array| -> Result<Vec<f64>, String> {
+            a.data
+                .iter()
+                .map(|x| x.ok_or_else(|| format!("\"{key}\" has a missing entry")))
+                .collect()
+        };
+        let mut p = Predictions::default();
+        for (key, a) in t {
+            match key.as_str() {
+                "quarters_num" => p.quarters_num = numbers(key, a)?,
+                "years_num" => p.years_num = numbers(key, a)?,
+                _ => {
+                    if a.size.len() != 2 {
+                        return Err(format!("\"{key}\" is not a matrix"));
+                    }
+                    let (rows, cols) = (a.size[0], a.size[1]);
+                    let d = numbers(key, a)?;
+                    let m = (0..rows)
+                        .map(|r| (0..cols).map(|c| d[c * rows + r]).collect())
+                        .collect();
+                    p.series.insert(key.clone(), m);
+                }
+            }
+        }
+        for key in ["quarters_num", "years_num"] {
+            if !t.contains_key(key) {
+                return Err(format!("the predictions have no \"{key}\""));
+            }
+        }
+        Ok(p)
+    }
 }
 
 /// The variables with real and nominal series, levels and growth rates, and
