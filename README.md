@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl` and `opt.jl` that these use; `positive.jl` |
-| Not yet ported | The model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); calibration, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the built-in data sets such as `AUSTRIA2010Q1`; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl` and `opt.jl` that these use; `positive.jl` |
+| Not yet ported | The model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); calibration with its data `ITALY_CALIBRATION`, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the package extensions in `ext/` |
 
 ## Installation
 
@@ -52,30 +52,36 @@ The crate is not on crates.io. Add it as a Git dependency:
 beforeit = { git = "https://github.com/ramonfueglister/port-beforeit" }
 ```
 
-It needs Rust 1.88 or newer. Its only dependency is
-[`libm`](https://crates.io/crates/libm), and it contains no `unsafe` code.
+It needs Rust 1.88 or newer. It depends on
+[`libm`](https://crates.io/crates/libm) and, to read the data sets,
+[`serde_json`](https://crates.io/crates/serde_json); it contains no `unsafe`
+code.
 
 ## Usage
 
 ```rust
-use beforeit::{InitialConditions, Model, Parameters, Xoshiro};
+use beforeit::{AUSTRIA2010Q1, Model, Xoshiro};
 
-/// Real GDP of the initial state and of 20 simulated quarters.
-fn real_gdp(p: &Parameters, ic: &InitialConditions) -> Result<Vec<f64>, String> {
+/// Real GDP of the initial state and of 20 simulated quarters, Austria
+/// from 2010Q1.
+fn real_gdp() -> Result<Vec<f64>, String> {
+    let s = &*AUSTRIA2010Q1;
     let mut rng = Xoshiro::seed_from_u64(1);
-    let mut model = Model::new(p, ic, &mut rng)?;
+    let mut model = Model::new(&s.parameters, &s.initial_conditions, &mut rng)?;
     model.run(20, &mut rng);
     Ok(model.data.real_gdp)
 }
 ```
 
-The crate contains no calibration. `Parameters` and `InitialConditions` are
-plain structs whose fields have the names of the keys of BeforeIT.jl's
-`parameters` and `initial_conditions`; tables D.2, D.3, E.1 and E.2 of the
-online appendix explain them. The example loads the Austrian calibration for
-2010Q1, which the tests take from BeforeIT.jl (see
-[`tests/data`](tests/data/README.md)), simulates 20 quarters like the example
-in the README of BeforeIT.jl, and prints real GDP:
+`Parameters` and `InitialConditions` are plain structs whose fields have the
+names of the keys of BeforeIT.jl's `parameters` and `initial_conditions`;
+tables D.2, D.3, E.1 and E.2 of the online appendix explain them. The crate
+contains BeforeIT.jl's data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and
+`STEADY_STATE2010Q1`, converted to JSON (see [`data`](data/README.md));
+`Parameters::from_json` and `InitialConditions::from_json` read other
+calibrations with the same keys. The example simulates 20 quarters of
+`AUSTRIA2010Q1` like the example in the README of BeforeIT.jl and prints real
+GDP:
 
 ```sh
 cargo run --release --example austria
@@ -83,6 +89,7 @@ cargo run --release --example austria
 
 | Rust | BeforeIT.jl |
 |---|---|
+| `AUSTRIA2010Q1.parameters`, `AUSTRIA2010Q1.initial_conditions` | `Bit.AUSTRIA2010Q1.parameters`, `Bit.AUSTRIA2010Q1.initial_conditions` |
 | `Model::new(&p, &ic, &mut rng)` | `Model(parameters, initial_conditions)` |
 | `p.n_banks = 3` before `Model::new` | `parameters["n_banks"] = 3` |
 | `model.step(&mut rng)` | `step!(model)` |
@@ -239,6 +246,14 @@ complete.
 - [`tests/utils.rs`](tests/utils.rs): adding and deleting agents and `pos`
   and `neg` as in `test/utils/modify.jl` and `test/utils/positive.jl`; that
   every ID still finds its agent after several deletions; and `DataVector`.
+- [`tests/steady_state.rs`](tests/steady_state.rs), as
+  `test/steady_state.jl`: with `STEADY_STATE2010Q1`, every national
+  accounts series stays constant over five quarters within the tolerances
+  of the Julia test.
+- [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
+  values of its file, and is read like BeforeIT's dictionaries (defaults of
+  the optional parameters, counts stored as floats, column matrices as
+  lists, errors for missing keys).
 - [`tests/invalid_inputs.rs`](tests/invalid_inputs.rs): inputs that
   `Model::new` rejects, and borderline inputs that it accepts like the Julia
   code.
@@ -249,9 +264,10 @@ complete.
   values of BeforeIT.jl's tests; the shocks `epsilon` against the MATLAB
   values in `test/deterministic/epsilon.jl`.
 
-The reference values are converted from files of BeforeIT.jl by
-[`tests/data/convert.py`](tests/data/convert.py), which reproduces them
-byte for byte. CI checks the formatting and runs `cargo clippy` and the
+The data sets and the reference values are converted from files of
+BeforeIT.jl by [`data/convert.py`](data/convert.py) and
+[`tests/data/convert.py`](tests/data/convert.py), which reproduce them byte
+for byte. CI checks the formatting and runs `cargo clippy` and the
 tests on stable Rust, and the tests on Rust 1.88.
 
 ## Layout
@@ -271,6 +287,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/markets.rs` | `src/markets/` |
 | `src/data.rs` | `src/utils/data.jl` |
 | `src/accounting.rs` | `src/utils/get_accounting_identities.jl` |
+| `src/datasets.rs`, `data/` | `src/utils/standard_params_initial_conditions.jl`, `data/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
 | `src/julia.rs` | Julia's `min`, `max`, `round` and `sum`; `src/utils/positive.jl` |
@@ -307,8 +324,8 @@ form.
 
 Apache License 2.0, like BeforeIT.jl; see [`LICENSE`](LICENSE). The port is a
 derivative work of BeforeIT.jl, Copyright 2024 Banca d'Italia and the authors;
-see [`NOTICE`](NOTICE). The files in `tests/data` are converted from files of
-BeforeIT.jl. The online appendix of the paper (CC BY-NC-ND 4.0) is cited by
+see [`NOTICE`](NOTICE). The files in `data` and `tests/data` are converted
+from files of BeforeIT.jl. The online appendix of the paper (CC BY-NC-ND 4.0) is cited by
 its equation and table numbers; its text is not reproduced.
 
 The disclaimer of BeforeIT.jl applies to the model: "All views expressed are

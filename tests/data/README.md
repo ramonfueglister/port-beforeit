@@ -6,8 +6,6 @@ Reference data for the tests, converted to JSON from files of
 
 | File here | Source in BeforeIT.jl | Content |
 |---|---|---|
-| `austria_2010q1_parameters.json` | `data/austria/parameters/2010Q1.jld2` | Parameters of the Austrian calibration for 2010Q1 |
-| `austria_2010q1_initial_conditions.json` | `data/austria/initial_conditions/2010Q1.jld2` | Initial conditions for 2010Q1 |
 | `matlab_init_vars_firms.json` | `test/matlab_code/init_vars_firms.mat` | Initial state of the firms, MATLAB code |
 | `matlab_init_vars_bank.json` | `test/matlab_code/init_vars_bank.mat` | Initial state of the bank, MATLAB code |
 | `matlab_init_vars_households.json` | `test/matlab_code/init_vars_households.mat` | Initial state of the households, MATLAB code |

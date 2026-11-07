@@ -187,6 +187,12 @@ pub struct InitialConditions {
     pub sb_other: f64,
     /// Unemployment benefits.
     pub w_UB: f64,
+    /// Histories of the policy rate, euro area GDP and euro area inflation,
+    /// at least `T_prime` quarters. Only the CANVAS model uses them; they
+    /// are empty when the initial conditions do not have them.
+    pub r_bar_series: Vec<f64>,
+    pub Y_EA_series: Vec<f64>,
+    pub pi_EA_series: Vec<f64>,
 }
 
 /// Values that stay fixed during a run, BeforeIT `Properties`.
@@ -368,4 +374,221 @@ fn check(p: &Parameters, ic: &InitialConditions) -> Result<(), String> {
     // Julia's `epsilon(C)` throws in the first quarter for such a matrix.
     crate::estimate::shock_factor(&p.C)?;
     Ok(())
+}
+
+/// The JSON object of a data set.
+type Object = serde_json::Map<String, serde_json::Value>;
+
+fn object(text: &str, what: &str) -> Result<Object, String> {
+    match serde_json::from_str(text) {
+        Ok(serde_json::Value::Object(o)) => Ok(o),
+        Ok(_) => Err(format!("{what}: not a JSON object")),
+        Err(e) => Err(format!("{what}: {e}")),
+    }
+}
+
+/// Julia `dict[key]`, which throws a `KeyError` for a missing key.
+fn get<'a>(o: &'a Object, key: &str) -> Result<&'a serde_json::Value, String> {
+    o.get(key).ok_or_else(|| format!("{key} is missing"))
+}
+
+fn as_number(v: &serde_json::Value, key: &str) -> Result<f64, String> {
+    v.as_f64().ok_or_else(|| format!("{key} is not a number"))
+}
+
+fn number(o: &Object, key: &str) -> Result<f64, String> {
+    as_number(get(o, key)?, key)
+}
+
+/// A count, which the data sets store as an integer or a float, Julia
+/// `Int(x)`.
+fn count(o: &Object, key: &str) -> Result<usize, String> {
+    as_count(number(o, key)?, key)
+}
+
+fn as_count(x: f64, key: &str) -> Result<usize, String> {
+    if x >= 0.0 && x.fract() == 0.0 && x < 2f64.powi(53) {
+        Ok(x as usize)
+    } else {
+        Err(format!("{key} = {x} is not a count"))
+    }
+}
+
+/// A list, Julia `vec(x)`: a matrix (a list of rows) is read column by
+/// column.
+fn list(o: &Object, key: &str) -> Result<Vec<f64>, String> {
+    let rows = get(o, key)?
+        .as_array()
+        .ok_or_else(|| format!("{key} is not a list"))?;
+    if rows.iter().all(|x| x.is_number()) {
+        return rows.iter().map(|x| as_number(x, key)).collect();
+    }
+    let m = matrix(o, key)?;
+    let n = m.first().map_or(0, |r| r.len());
+    Ok((0..n).flat_map(|c| m.iter().map(move |r| r[c])).collect())
+}
+
+/// A matrix, as a list of rows of equal length.
+fn matrix(o: &Object, key: &str) -> Result<Vec<Vec<f64>>, String> {
+    let rows = get(o, key)?
+        .as_array()
+        .ok_or_else(|| format!("{key} is not a matrix"))?;
+    let m: Vec<Vec<f64>> = rows
+        .iter()
+        .map(|row| {
+            row.as_array()
+                .ok_or_else(|| format!("{key} is not a matrix"))?
+                .iter()
+                .map(|x| as_number(x, key))
+                .collect()
+        })
+        .collect::<Result<_, _>>()?;
+    if m.iter().any(|r| r.len() != m[0].len()) {
+        return Err(format!("{key} has rows of different lengths"));
+    }
+    Ok(m)
+}
+
+/// Julia `get(dict, key, default)`.
+fn number_or(o: &Object, key: &str, default: f64) -> Result<f64, String> {
+    o.get(key).map_or(Ok(default), |v| as_number(v, key))
+}
+
+impl Parameters {
+    /// Reads `parameters` from a JSON object whose keys are BeforeIT's, such
+    /// as the files in the crate's folder `data`. Counts may be floats, as in
+    /// BeforeIT's JLD2 files. `n_banks`, `omega_pi`, `theta_calvo` and
+    /// `overdrafts_in_capital_ratio` may be missing; they then get
+    /// BeforeIT's defaults 1, 0, 1 and false. Other keys are ignored.
+    pub fn from_json(text: &str) -> Result<Parameters, String> {
+        let o = &object(text, "parameters")?;
+        let c = matrix(o, "C")?;
+        if c.len() != 3 || c[0].len() != 3 {
+            return Err("C is not a 3 × 3 matrix".into());
+        }
+        let C = [0, 1, 2].map(|r| [c[r][0], c[r][1], c[r][2]]);
+        let n = |key| number(o, key);
+        let overdrafts = match o.get("overdrafts_in_capital_ratio") {
+            None => false,
+            Some(serde_json::Value::Bool(b)) => *b,
+            // Julia `Bool(x)` accepts the numbers 0 and 1.
+            Some(v) => match as_number(v, "overdrafts_in_capital_ratio")? {
+                0.0 => false,
+                1.0 => true,
+                x => return Err(format!("overdrafts_in_capital_ratio = {x} is not a Bool")),
+            },
+        };
+        Ok(Parameters {
+            G: count(o, "G")?,
+            T_prime: count(o, "T_prime")?,
+            H_act: count(o, "H_act")?,
+            H_inact: count(o, "H_inact")?,
+            J: count(o, "J")?,
+            L: count(o, "L")?,
+            I_s: list(o, "I_s")?
+                .into_iter()
+                .map(|x| as_count(x, "I_s"))
+                .collect::<Result<_, _>>()?,
+            alpha_s: list(o, "alpha_s")?,
+            beta_s: list(o, "beta_s")?,
+            kappa_s: list(o, "kappa_s")?,
+            delta_s: list(o, "delta_s")?,
+            w_s: list(o, "w_s")?,
+            tau_Y_s: list(o, "tau_Y_s")?,
+            tau_K_s: list(o, "tau_K_s")?,
+            tau_INC: n("tau_INC")?,
+            tau_FIRM: n("tau_FIRM")?,
+            tau_VAT: n("tau_VAT")?,
+            tau_SIF: n("tau_SIF")?,
+            tau_SIW: n("tau_SIW")?,
+            tau_EXPORT: n("tau_EXPORT")?,
+            tau_CF: n("tau_CF")?,
+            tau_G: n("tau_G")?,
+            theta_UB: n("theta_UB")?,
+            psi: n("psi")?,
+            psi_H: n("psi_H")?,
+            mu: n("mu")?,
+            theta_DIV: n("theta_DIV")?,
+            theta: n("theta")?,
+            zeta: n("zeta")?,
+            zeta_LTV: n("zeta_LTV")?,
+            zeta_b: n("zeta_b")?,
+            b_CF_g: list(o, "b_CF_g")?,
+            b_CFH_g: list(o, "b_CFH_g")?,
+            b_HH_g: list(o, "b_HH_g")?,
+            c_G_g: list(o, "c_G_g")?,
+            c_E_g: list(o, "c_E_g")?,
+            c_I_g: list(o, "c_I_g")?,
+            a_sg: matrix(o, "a_sg")?,
+            C,
+            alpha_G: n("alpha_G")?,
+            beta_G: n("beta_G")?,
+            sigma_G: n("sigma_G")?,
+            alpha_E: n("alpha_E")?,
+            beta_E: n("beta_E")?,
+            sigma_E: n("sigma_E")?,
+            alpha_I: n("alpha_I")?,
+            beta_I: n("beta_I")?,
+            sigma_I: n("sigma_I")?,
+            alpha_pi_EA: n("alpha_pi_EA")?,
+            beta_pi_EA: n("beta_pi_EA")?,
+            sigma_pi_EA: n("sigma_pi_EA")?,
+            alpha_Y_EA: n("alpha_Y_EA")?,
+            beta_Y_EA: n("beta_Y_EA")?,
+            sigma_Y_EA: n("sigma_Y_EA")?,
+            r_G: n("r_G")?,
+            rho: n("rho")?,
+            r_star: n("r_star")?,
+            pi_star: n("pi_star")?,
+            xi_pi: n("xi_pi")?,
+            xi_gamma: n("xi_gamma")?,
+            n_banks: as_count(number_or(o, "n_banks", 1.0)?, "n_banks")?,
+            omega_pi: number_or(o, "omega_pi", 0.0)?,
+            theta_calvo: number_or(o, "theta_calvo", 1.0)?,
+            overdrafts_in_capital_ratio: overdrafts,
+        })
+    }
+}
+
+impl InitialConditions {
+    /// Reads `initial_conditions` from a JSON object whose keys are
+    /// BeforeIT's, such as the files in the crate's folder `data`. The
+    /// series of the CANVAS model may be missing. Other keys are ignored.
+    pub fn from_json(text: &str) -> Result<InitialConditions, String> {
+        let o = &object(text, "initial_conditions")?;
+        let n = |key| number(o, key);
+        let optional = |key| {
+            if o.contains_key(key) {
+                list(o, key)
+            } else {
+                Ok(Vec::new())
+            }
+        };
+        Ok(InitialConditions {
+            D_H: n("D_H")?,
+            D_I: n("D_I")?,
+            D_RoW: n("D_RoW")?,
+            E_CB: n("E_CB")?,
+            E_k: n("E_k")?,
+            K_H: n("K_H")?,
+            L_G: n("L_G")?,
+            L_I: n("L_I")?,
+            N_s: list(o, "N_s")?,
+            Y: list(o, "Y")?,
+            pi: list(o, "pi")?,
+            Y_EA: n("Y_EA")?,
+            pi_EA: n("pi_EA")?,
+            Y_I: list(o, "Y_I")?,
+            C_E: list(o, "C_E")?,
+            C_G: list(o, "C_G")?,
+            omega: n("omega")?,
+            r_bar: n("r_bar")?,
+            sb_inact: n("sb_inact")?,
+            sb_other: n("sb_other")?,
+            w_UB: n("w_UB")?,
+            r_bar_series: optional("r_bar_series")?,
+            Y_EA_series: optional("Y_EA_series")?,
+            pi_EA_series: optional("pi_EA_series")?,
+        })
+    }
 }

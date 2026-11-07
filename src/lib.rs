@@ -17,7 +17,8 @@
 //! As in BeforeIT.jl, every rule is a function of the model (`banks_rate`,
 //! `firms_profits`, ...) whose result a `set_` function stores (`set_banks_rate`,
 //! `set_firms_profits`, ...), and a model type can replace any rule; see
-//! [`Extension`]. [`Model`] is BeforeIT's `Model`.
+//! [`Extension`]. [`Model`] is BeforeIT's `Model`. [`AUSTRIA2010Q1`],
+//! [`ITALY2010Q1`] and [`STEADY_STATE2010Q1`] are BeforeIT's data sets.
 //!
 //! Indices start at 0: sector `g` and firm `i` are Julia's `g + 1` and `i + 1`.
 //! Where this port deliberately differs from the Julia code is listed in
@@ -28,6 +29,7 @@
 
 pub mod agents;
 pub mod data;
+pub mod datasets;
 pub mod estimate;
 pub mod extension;
 pub mod julia;
@@ -50,6 +52,7 @@ pub use agents::{
 };
 pub use bank::taylor_rule;
 pub use data::{Data, DataVector};
+pub use datasets::{AUSTRIA2010Q1, ITALY2010Q1, InitialState, STEADY_STATE2010Q1};
 pub use extension::{Extension, Standard};
 pub use firms::FirmsDecisions;
 pub use params::{InitialConditions, Parameters, Properties};

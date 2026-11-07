@@ -7,8 +7,8 @@ This product is a translation into Rust of BeforeIT.jl
 BeforeIT.jl: Copyright 2024 - Banca d'Italia and the authors.
 Licensed under the Apache License, Version 2.0.
 
-The files in tests/data are converted from files of BeforeIT.jl
-(data/austria and test/matlab_code); see tests/data/README.md.
+The files in data and tests/data are converted from files of BeforeIT.jl
+(data and test/matlab_code); see data/README.md and tests/data/README.md.
 
 The changes with respect to BeforeIT.jl are described in README.md, section
 "Differences from BeforeIT.jl".
