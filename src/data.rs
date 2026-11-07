@@ -50,6 +50,44 @@ pub struct Data {
     pub roe_per_bank: Vec<Vec<f64>>,
 }
 
+impl Data {
+    /// The national accounts series called `name`, Julia
+    /// `getproperty(data, Symbol(name))` for the fields with one number per
+    /// collection, or `None` if there is no such series.
+    pub fn series_by_name(&self, name: &str) -> Option<&[f64]> {
+        Some(match name {
+            "nominal_gdp" => &self.nominal_gdp,
+            "real_gdp" => &self.real_gdp,
+            "nominal_gva" => &self.nominal_gva,
+            "real_gva" => &self.real_gva,
+            "nominal_household_consumption" => &self.nominal_household_consumption,
+            "real_household_consumption" => &self.real_household_consumption,
+            "nominal_government_consumption" => &self.nominal_government_consumption,
+            "real_government_consumption" => &self.real_government_consumption,
+            "nominal_capitalformation" => &self.nominal_capitalformation,
+            "real_capitalformation" => &self.real_capitalformation,
+            "nominal_fixed_capitalformation" => &self.nominal_fixed_capitalformation,
+            "real_fixed_capitalformation" => &self.real_fixed_capitalformation,
+            "nominal_fixed_capitalformation_dwellings" => {
+                &self.nominal_fixed_capitalformation_dwellings
+            }
+            "real_fixed_capitalformation_dwellings" => &self.real_fixed_capitalformation_dwellings,
+            "nominal_exports" => &self.nominal_exports,
+            "real_exports" => &self.real_exports,
+            "nominal_imports" => &self.nominal_imports,
+            "real_imports" => &self.real_imports,
+            "operating_surplus" => &self.operating_surplus,
+            "compensation_employees" => &self.compensation_employees,
+            "wages" => &self.wages,
+            "taxes_production" => &self.taxes_production,
+            "gdp_deflator_growth_ea" => &self.gdp_deflator_growth_ea,
+            "real_gdp_ea" => &self.real_gdp_ea,
+            "euribor" => &self.euribor,
+            _ => return None,
+        })
+    }
+}
+
 /// The data of several runs, BeforeIT `DataVector`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DataVector {

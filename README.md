@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
-| Not yet ported | Prediction pipelines and forecast evaluation; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`), also with the goods markets of the products in parallel threads; `step!`, `run!` and `ensemblerun!` with shocks and the option `parallel` (`one_step.jl`, `one_simulation.jl`) and the shock types (`src/shocks/`); data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; the data sets `AUSTRIA2010Q1`, `ITALY2010Q1` and `STEADY_STATE2010Q1` (`standard_params_initial_conditions.jl`); the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); `estimate.jl` with `estimate_taylor_rule`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` and `positive.jl`; the calibration (`calibration.jl`, `_calibration_steady_state.jl`) with its data `ITALY_CALIBRATION` and the calibration objects of the Zenodo record (`standard_calibration_data.jl`); predictions from simulations (`get_predictions_from_sims.jl`, `toannual.jl`); and the parts of `randpl.jl` and `opt.jl` that these use |
+| Not yet ported | Forecast evaluation (`dmtest.jl`, `mztest.jl`, `bias_ttest.jl`, `varx.jl`, `correlation_utils.jl`, `analysis_utils.jl`, `error_tables.jl`, `save_all_predictions.jl`), `diff_transform.jl`; the package extensions in `ext/` |
 
 ## Installation
 
@@ -203,6 +203,39 @@ deficit and the AR(1) and Taylor rule coefficients set for a steady state;
 its result for 2010Q1 is `STEADY_STATE2010Q1` up to the rounding described
 below.
 
+`get_predictions_from_sims` turns the runs of an ensemble into forecasts in
+the units of the data, as BeforeIT `src/utils/get_predictions_from_sims.jl`:
+the simulated growth rates applied to the last observed values, quarterly
+and as calendar years, with growth rates and deflators:
+
+```rust
+use beforeit::{
+    DataVector, Date, ITALY_CALIBRATION, Model, NoShock, Predictions, Xoshiro, ensemblerun,
+    get_params_and_initial_conditions, get_predictions_from_sims,
+};
+
+/// Forecasts of 100 runs of 12 quarters from 2010Q1.
+fn forecast() -> Result<Predictions, String> {
+    let start = Date::new(2010, 3, 31);
+    let c = get_params_and_initial_conditions(&ITALY_CALIBRATION, start, 0.001, false)?;
+    let mut rng = Xoshiro::seed_from_u64(1);
+    let model = Model::new(&c.parameters, &c.initial_conditions, &mut rng)?;
+    let mut models = vec![model; 100];
+    ensemblerun(&mut models, 12, &mut rng, true, &NoShock);
+    let mut data = ITALY_CALIBRATION.clone();
+    data.set_gdp_deflators()?;
+    let p = get_predictions_from_sims(&DataVector::from_models(&models), &data.data, start)?;
+    // Real GDP in 2011, one value per run.
+    println!("{:?}", p.series["real_gdp"][1]);
+    Ok(p)
+}
+```
+
+Row 0 of each series is the data at the start date (quarterly) or in its
+year (yearly). `set_gdp_deflators` stores the GDP deflators in the data as
+BeforeIT's calibration does in the dictionaries it is given; the
+predictions read them.
+
 `cargo doc --open` shows the documentation of every type and rule.
 
 ## Randomness and reproducibility
@@ -234,6 +267,8 @@ from the `libm` crate, not from the system's math library.
    (`test/matlab_code/detabm.m`, lines 116 and 126) take the minimum firm by
    firm, as BeforeIT.jl does itself for intermediate inputs (`min.` in line
    21, A.18). The port takes the minimum firm by firm in all three places.
+   Its forecasts therefore differ from the reference values of BeforeIT's
+   prediction test by up to 3.2e-5 of a value (see Verification).
 2. **Reserves in `get_accounting_identity_banks`.** BeforeIT
    `src/utils/get_accounting_identities.jl` adds the vector of the banks'
    reserves `model.banks.D_k` to a number, which throws in Julia. The port
@@ -284,6 +319,12 @@ from the `libm` crate, not from the system's math library.
    the GDP deflators in the caller's dictionaries `data` and `ea`; the port
    does not change the calibration data. Dates are calendar days: Julia's
    `num2date` also keeps a time of day, which the calibration never uses.
+8. **Predictions.** `get_predictions_from_sims` returns an error where
+   BeforeIT.jl would throw and also where a value of the data at the start
+   date is `missing` or not unique, which Julia would carry into the
+   forecasts as `missing` or broadcast over several values. The result is a
+   struct with the series as `time × runs` matrices given by their rows
+   (`Predictions`) instead of a dictionary.
 
 ## Where BeforeIT.jl differs from the paper
 
@@ -398,6 +439,17 @@ keeps:
   see the test); it passes for AT, DE and FR, and for these three the port
   also agrees with the NumPy translation for 2010Q1, 2020Q1 and 2023Q4 with
   and without `use_growth_rate_ar1` within the same tolerances.
+- [`tests/predictions.rs`](tests/predictions.rs), as
+  `test/deterministic/prediction_pipeline.jl`: calibration of
+  `ITALY_CALIBRATION` for 2010Q1 at scale 0.0001, two runs of 12 quarters
+  without randomness and `get_predictions_from_sims`, against Julia's
+  values in `test/deterministic/2010Q1.jld2`. With the minimum of A.14 and
+  A.22 as in the Julia code (difference 1 above, as a model type in the
+  test), all 105 series and the dates agree within 6.3e-12 of a level and
+  2.9e-12 of a growth rate, far within Julia's test (`atol` and `rtol`
+  1e-6). With the port's minimum per firm, the predictions differ by up to
+  3.2e-5 of a value, and 60 of the 107 keys of the result fail Julia's
+  test; the test checks this too.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -444,11 +496,12 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/data.rs` | `src/utils/data.jl` |
 | `src/accounting.rs` | `src/utils/get_accounting_identities.jl` |
 | `src/datasets.rs`, `data/` | `src/utils/standard_params_initial_conditions.jl`, `data/` |
+| `src/predictions.rs` | `src/utils/get_predictions_from_sims.jl`, `toannual.jl` |
 | `src/calibration.rs`, `data/italy/calibration.json` | `src/utils/calibration.jl`, `_calibration_steady_state.jl`, `standard_calibration_data.jl`, `data/italy/calibration/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/model_extensions/` | `src/model_extensions/` |
 | `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
-| `src/julia.rs` | Julia's `min`, `max`, `round` and `sum`; `src/utils/positive.jl` |
+| `src/julia.rs` | Julia's `min`, `max`, `round`, `sum` and `x^n`; `src/utils/positive.jl` |
 
 ## Citation
 

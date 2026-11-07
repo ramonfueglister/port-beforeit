@@ -256,6 +256,43 @@ impl CalibrationData {
             estimation_date: date("estimation_date")?,
         })
     }
+
+    /// Stores `gdp_deflator_quarterly = nominal_gdp_quarterly ./
+    /// real_gdp_quarterly` in the tables `data` and `ea` (`missing` where
+    /// either is missing), as BeforeIT's calibration does in the dictionaries
+    /// it is given. The port's calibration leaves the data unchanged; call
+    /// this to obtain the state of Julia's data after a calibration, for
+    /// example before
+    /// [`get_predictions_from_sims`](crate::predictions::get_predictions_from_sims),
+    /// which reads the deflator.
+    ///
+    /// Returns an error if a series is missing or the two have different
+    /// sizes.
+    pub fn set_gdp_deflators(&mut self) -> Result<(), String> {
+        for (name, t) in [("data", &mut self.data), ("ea", &mut self.ea)] {
+            let get = |key: &str| {
+                t.get(key)
+                    .ok_or_else(|| format!("{name}[\"{key}\"] is missing"))
+            };
+            let (nominal, real) = (get("nominal_gdp_quarterly")?, get("real_gdp_quarterly")?);
+            if nominal.size != real.size {
+                return Err(format!(
+                    "{name}: nominal_gdp_quarterly and real_gdp_quarterly have different sizes"
+                ));
+            }
+            let deflator = Array {
+                size: nominal.size.clone(),
+                data: nominal
+                    .data
+                    .iter()
+                    .zip(&real.data)
+                    .map(|(n, r)| Some((*n)? / (*r)?))
+                    .collect(),
+            };
+            t.insert("gdp_deflator_quarterly".to_string(), deflator);
+        }
+        Ok(())
+    }
 }
 
 fn array(v: &serde_json::Value, what: &str) -> Result<Array, String> {

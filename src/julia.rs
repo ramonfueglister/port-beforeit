@@ -146,6 +146,68 @@ pub(crate) fn dot(x: &[f64], y: &[f64]) -> f64 {
     x.iter().zip(y).map(|(a, b)| a * b).sum()
 }
 
+/// `(x * y, error)` with `x * y = product + error` exactly, Julia
+/// `two_mul` on a processor with FMA instructions.
+#[inline]
+fn two_mul(x: f64, y: f64) -> (f64, f64) {
+    let xy = x * y;
+    (xy, libm::fma(x, y, -xy))
+}
+
+/// Julia `x^n` for a `Float64` and an integer (`^(x::Float64, n::Integer)`
+/// of Julia 1.12, which `x^4` with a literal exponent also calls):
+/// compensated power by squaring, `pow_body`. Julia's `muladd` is an FMA
+/// on processors that have one; here it always is.
+///
+/// # Panics
+///
+/// If `n` is outside −4096..=24576, where Julia switches to its
+/// floating-point power, which is not ported.
+pub fn powi(x: f64, n: i64) -> f64 {
+    assert!(
+        (-4096..=24576).contains(&n),
+        "x^n is ported for -4096 <= n <= 24576 only"
+    );
+    if n == 0 {
+        return 1.0;
+    }
+    let (mut x, mut n) = (x, n);
+    let mut y = 1.0;
+    let mut xnlo = -0.0;
+    let mut ynlo = 0.0;
+    if n == 3 {
+        return x * x * x;
+    }
+    if n < 0 {
+        let rx = 1.0 / x;
+        if n == -2 {
+            return rx * rx;
+        }
+        if x.is_finite() {
+            xnlo = -libm::fma(x, rx, -1.0) * rx;
+        }
+        x = rx;
+        n = -n;
+    }
+    while n > 1 {
+        if n & 1 > 0 {
+            let err = libm::fma(y, xnlo, x * ynlo);
+            (y, ynlo) = two_mul(x, y);
+            ynlo += err;
+        }
+        let err = x * 2.0 * xnlo;
+        (x, xnlo) = two_mul(x, x);
+        xnlo += err;
+        n >>= 1;
+    }
+    let err = libm::fma(y, xnlo, x * ynlo);
+    if x.is_finite() && err.is_finite() {
+        libm::fma(x, y, err)
+    } else {
+        x * y
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +302,19 @@ mod tests {
         assert!(round_int(two_63).is_err());
         assert!(round_int(f64::NAN).is_err());
         assert!(round_int(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn powi_is_compensated() {
+        assert_eq!(powi(2.0, 10), 1024.0);
+        assert_eq!(powi(3.0, 0), 1.0);
+        assert_eq!(powi(2.0, -2), 0.25);
+        assert_eq!(powi(-2.0, 3), -8.0);
+        // Correctly rounded where repeated squaring is not: the float
+        // nearest to 1.0134^4 is 1.054687016657794, (1.0134^2)^2 rounds
+        // to the next one.
+        let x = 1.0134;
+        assert_eq!(powi(x, 4), 1.054687016657794);
+        assert_eq!((x * x) * (x * x), 1.0546870166577942);
     }
 }

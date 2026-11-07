@@ -38,6 +38,7 @@ pub mod extension;
 pub mod julia;
 pub mod model_extensions;
 pub mod params;
+pub mod predictions;
 pub mod random;
 pub mod shocks;
 
@@ -67,6 +68,7 @@ pub use firms::FirmsDecisions;
 pub use model_extensions::canvas::{Canvas, ModelCANVAS};
 pub use model_extensions::growth_rate::{GrowthRate, ModelGR};
 pub use params::{InitialConditions, Parameters, Properties};
+pub use predictions::{Predictions, get_predictions_from_sims};
 pub use random::{Deterministic, Randomness, WeightVector, Xoshiro};
 pub use shocks::{
     ConsumptionShock, InterestRateShock, NoShock, ProductivityShock, Shock, ensemblerun,
