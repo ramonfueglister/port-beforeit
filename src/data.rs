@@ -50,6 +50,82 @@ pub struct Data {
     pub roe_per_bank: Vec<Vec<f64>>,
 }
 
+/// The data of several runs, BeforeIT `DataVector`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DataVector {
+    pub vector: Vec<Data>,
+}
+
+impl DataVector {
+    /// `DataVector(model)`: the data of one model.
+    pub fn from_model<X>(model: &AbstractModel<X>) -> DataVector {
+        DataVector {
+            vector: vec![model.data.clone()],
+        }
+    }
+
+    /// `DataVector(model_vec)`: the data of several models.
+    pub fn from_models<'a, X: 'a>(
+        models: impl IntoIterator<Item = &'a AbstractModel<X>>,
+    ) -> DataVector {
+        DataVector {
+            vector: models.into_iter().map(|m| m.data.clone()).collect(),
+        }
+    }
+
+    /// One series of every run side by side, Julia `data_vector.name`
+    /// (`hcat` of the series): row `t` holds the value of each run at
+    /// collection `t`. For example, `dv.series(|d| &d.real_gdp)`.
+    ///
+    /// # Panics
+    ///
+    /// If the runs have series of different lengths (Julia throws a
+    /// `DimensionMismatch`).
+    pub fn series<T: Clone>(&self, field: impl Fn(&Data) -> &[T]) -> Vec<Vec<T>> {
+        let columns: Vec<&[T]> = self.vector.iter().map(field).collect();
+        let T = columns.first().map_or(0, |c| c.len());
+        assert!(
+            columns.iter().all(|c| c.len() == T),
+            "the runs have series of different lengths"
+        );
+        (0..T)
+            .map(|t| columns.iter().map(|c| c[t].clone()).collect())
+            .collect()
+    }
+
+    /// Number of runs.
+    pub fn len(&self) -> usize {
+        self.vector.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.vector.is_empty()
+    }
+
+    /// The data of each run.
+    pub fn iter(&self) -> std::slice::Iter<'_, Data> {
+        self.vector.iter()
+    }
+}
+
+impl std::ops::Index<usize> for DataVector {
+    type Output = Data;
+
+    /// The data of run `i`, from 0 (Julia `data_vector[i]`, from 1).
+    fn index(&self, i: usize) -> &Data {
+        &self.vector[i]
+    }
+}
+
+impl<'a> IntoIterator for &'a DataVector {
+    type Item = &'a Data;
+    type IntoIter = std::slice::Iter<'a, Data>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.vector.iter()
+    }
+}
+
 /// `collect_data!(m)`: appends the values of the current state; the first
 /// call records the initial state. As in the Julia code, it calls
 /// `allocate_new_data!` and then `update_data_init!` or

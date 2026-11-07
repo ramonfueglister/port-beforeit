@@ -45,10 +45,11 @@ mod rotw;
 
 pub use accounting::{get_accounting_identities, get_accounting_identity_banks};
 pub use agents::{
-    Aggregates, Banks, CentralBank, Firms, Government, Households, RestOfTheWorld, Workers,
+    Aggregates, Banks, CentralBank, Firm, Firms, Government, Households, RestOfTheWorld, Worker,
+    Workers,
 };
 pub use bank::taylor_rule;
-pub use data::Data;
+pub use data::{Data, DataVector};
 pub use extension::{Extension, Standard};
 pub use firms::FirmsDecisions;
 pub use params::{InitialConditions, Parameters, Properties};

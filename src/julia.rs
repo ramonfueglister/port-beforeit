@@ -40,6 +40,39 @@ pub fn pos(x: f64) -> f64 {
     if x.is_nan() || x < 0.0 { 0.0 } else { x }
 }
 
+/// `neg(x)` (BeforeIT `src/utils/positive.jl`): positive numbers and NaN
+/// become 0.
+#[inline]
+pub fn neg(x: f64) -> f64 {
+    if x.is_nan() || x > 0.0 { 0.0 } else { x }
+}
+
+/// `pos!(A)` (BeforeIT `src/utils/positive.jl`): NaN becomes 0, every other
+/// number `max(0, x)`. Unlike [`pos`], −0 becomes +0.
+pub fn pos_in_place(a: &mut [f64]) {
+    for x in a {
+        *x = if x.is_nan() { 0.0 } else { max(0.0, *x) };
+    }
+}
+
+/// `neg!(A)` (BeforeIT `src/utils/positive.jl`): NaN becomes 0, every other
+/// number `min(0, x)`, which gives the same as [`neg`].
+pub fn neg_in_place(a: &mut [f64]) {
+    for x in a {
+        *x = if x.is_nan() { 0.0 } else { min(0.0, *x) };
+    }
+}
+
+/// `matlab_round(x)` (BeforeIT `src/utils/positive.jl`), Julia
+/// `round(x, RoundNearestTiesUp)`: to the nearest integer, ties towards
+/// +∞, with the formula of Julia's `Base` (`floatfuncs.jl`).
+#[inline]
+pub fn matlab_round(x: f64) -> f64 {
+    // eps(0.5) = 2^-53.
+    let e = f64::EPSILON / 2.0;
+    ((x + (0.25 - e)) + (0.25 + e)).floor().copysign(x)
+}
+
 /// `zero_to_one(x)` (BeforeIT `src/utils/positive.jl`): 0 becomes 1.
 #[inline]
 pub fn zero_to_one(x: f64) -> f64 {
@@ -137,6 +170,39 @@ mod tests {
         assert_eq!(zero_to_one(0.0), 1.0);
         assert_eq!(zero_to_one(-0.0), 1.0);
         assert_eq!(zero_to_one(3.0), 3.0);
+    }
+
+    #[test]
+    fn neg_and_in_place_versions() {
+        assert_eq!(neg(1.0), 0.0);
+        assert_eq!(neg(-1.0), -1.0);
+        assert_eq!(neg(f64::NAN), 0.0);
+        let mut a = [1.0, -0.0, f64::NAN, -1.0];
+        pos_in_place(&mut a);
+        assert_eq!(a, [1.0, 0.0, 0.0, 0.0]);
+        assert!(a[1].is_sign_positive());
+        let mut a = [1.0, -0.0, f64::NAN, -1.0];
+        neg_in_place(&mut a);
+        assert_eq!(a, [0.0, 0.0, 0.0, -1.0]);
+        assert!(a[1].is_sign_negative());
+        assert!(a[2].is_sign_positive());
+        assert!(pos(-0.0).is_sign_negative());
+    }
+
+    #[test]
+    fn matlab_round_ties_up() {
+        assert_eq!(matlab_round(0.5), 1.0);
+        assert_eq!(matlab_round(1.5), 2.0);
+        assert_eq!(matlab_round(2.5), 3.0);
+        assert_eq!(matlab_round(-1.5), -1.0);
+        assert_eq!(matlab_round(-2.5), -2.0);
+        assert_eq!(matlab_round(-2.6), -3.0);
+        let r = matlab_round(-0.5);
+        assert!(r == 0.0 && r.is_sign_negative());
+        // The largest float below 0.5 and numbers without a fraction.
+        assert_eq!(matlab_round(0.49999999999999994), 0.0);
+        assert_eq!(matlab_round(4503599627370497.0), 4503599627370497.0);
+        assert_eq!(matlab_round(1e300), 1e300);
     }
 
     #[test]

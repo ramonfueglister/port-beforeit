@@ -128,10 +128,10 @@ pub fn banks_profits<X: Extension>(m: &mut AbstractModel<X>) -> Vec<f64> {
             D_h.extend(D_h_firms);
             D_h.push(b.D_h[k]);
 
-            let neg = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| max(0.0, -x)).collect() };
-            let plus = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| max(0.0, x)).collect() };
-            let r_terms = sum(&L_i) + sum(&neg(&D_i)) + sum(&neg(&D_h));
-            let r_bar_terms = b.D_k[k] - sum(&plus(&D_i)) - sum(&plus(&D_h));
+            let max0_minus = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| max(0.0, -x)).collect() };
+            let max0 = |v: &[f64]| -> Vec<f64> { v.iter().map(|&x| max(0.0, x)).collect() };
+            let r_terms = sum(&L_i) + sum(&max0_minus(&D_i)) + sum(&max0_minus(&D_h));
+            let r_bar_terms = b.D_k[k] - sum(&max0(&D_i)) - sum(&max0(&D_h));
             b.r[k] * r_terms + r_bar * r_bar_terms
         })
         .collect()

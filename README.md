@@ -40,8 +40,8 @@ appendix of the paper (A.1 to A.84,
 
 | | |
 |---|---|
-| Ported | Model setup (`src/model_init/`) except adding and deleting agents; model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank (`src/utils/data.jl`); `get_accounting_identities.jl`; and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl`, `opt.jl` and `positive.jl` that these use |
-| Not yet ported | Adding and deleting agents (`src/utils/modify.jl`) and `DataVector`; the model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); calibration, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the built-in data sets such as `AUSTRIA2010Q1`; the package extensions in `ext/` |
+| Ported | Model setup (`src/model_init/`); adding, deleting and looking up agents by ID (`src/utils/modify.jl`); model types (`@object` and methods per model type) as the trait `Extension`; all agent rules (`src/agent_actions/`) with one or several banks (`n_banks`) and the options `omega_pi` and `overdrafts_in_capital_ratio`; the credit, labour and goods markets (`src/markets/`); `step!` with shocks, `run!`; data collection with the series per bank and `DataVector` (`src/utils/data.jl`); `get_accounting_identities.jl`; and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl` and `opt.jl` that these use; `positive.jl` |
+| Not yet ported | The model extensions CANVAS (`init_CANVAS.jl`, with the option `theta_calvo`) and growth-rate model (`init_growth_rate_model.jl`); calibration, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; the shock types, `ensemblerun!` and multithreading; the built-in data sets such as `AUSTRIA2010Q1`; the package extensions in `ext/` |
 
 ## Installation
 
@@ -91,13 +91,18 @@ cargo run --release --example austria
 | `model.run(T, &mut rng)` | `run!(model, T)` |
 | `model.firms.Y_i[i]`, `model.cb.r_bar`, ... | `model.firms.Y_i[i]`, `model.cb.r_bar`, ... |
 | `model.data.real_gdp`, ... | `model.data.real_gdp`, ... |
+| `let i = model.w_act.index(id); model.w_act.Y_h[i]` | `model.w_act[id].Y_h` |
+| `model.w_act.getfields(id)`, `model.w_act.delete(id)`, `model.w_act.push(worker)` | `getfields(model.w_act[id])`, `delete!(model.w_act, id)`, `push!(model.w_act, t)` |
+| `DataVector::from_models(&models).series(\|d\| &d.real_gdp)` | `DataVector(models).real_gdp` |
 
 `step` calls the rules in the order of BeforeIT `src/one_step.jl`. Each rule
 is a public method named after its Julia function without the `!`, for
 example `set_firms_production` for `set_firms_production!`, so a quarter can
 also be run rule by rule. The state of all agents is public, one list per
 variable as in the Julia code: firm `i` is entry `i` of every firm list.
-Indices start at 0.
+Indices start at 0. Firms and persons also have IDs, as in BeforeIT
+`src/utils/modify.jl`: until an agent is deleted, its ID is its index, and
+afterwards `index(id)` gives its position.
 
 A shock is a closure that `step_with_shock` calls right after the central
 bank has set the policy rate, where `step!` calls `shock!`. BeforeIT.jl's
@@ -231,14 +236,18 @@ complete.
   estimate with the numbers of `test/agent_actions` and
   `test/utils/nfvar3_and_estimate.jl`, and `bank_exposure` and the option
   `omega_pi`, for which BeforeIT.jl has no test.
+- [`tests/utils.rs`](tests/utils.rs): adding and deleting agents and `pos`
+  and `neg` as in `test/utils/modify.jl` and `test/utils/positive.jl`; that
+  every ID still finds its agent after several deletions; and `DataVector`.
 - [`tests/invalid_inputs.rs`](tests/invalid_inputs.rs): inputs that
   `Model::new` rejects, and borderline inputs that it accepts like the Julia
   code.
-- Unit tests in `src/`: the Julia semantics of `min`, `max`, `round`, `pos`
-  and the order of `sum`; xoshiro256\*\* and SplitMix64 against reference
-  outputs; the distributions of the draws; the Cholesky factor; `rfvar3`
-  against the values of BeforeIT.jl's tests; the shocks `epsilon` against the
-  MATLAB values in `test/deterministic/epsilon.jl`.
+- Unit tests in `src/`: the Julia semantics of `min`, `max`, `round`,
+  `matlab_round`, `pos`, `neg`, `pos!`, `neg!` and the order of `sum`;
+  xoshiro256\*\* and SplitMix64 against reference outputs; the
+  distributions of the draws; the Cholesky factor; `rfvar3` against the
+  values of BeforeIT.jl's tests; the shocks `epsilon` against the MATLAB
+  values in `test/deterministic/epsilon.jl`.
 
 The reference values are converted from files of BeforeIT.jl by
 [`tests/data/convert.py`](tests/data/convert.py), which reproduces them
@@ -252,7 +261,7 @@ tests on stable Rust, and the tests on Rust 1.88.
 | `src/lib.rs`: `Model`, `step`, `run` | `src/model_init/init.jl`, `agents.jl`, `src/one_step.jl`, `src/one_simulation.jl` |
 | `src/extension.rs` | model types: `src/model_init/object_macro.jl` and methods per model type |
 | `src/params.rs` | the inputs and `src/model_init/init_properties.jl` |
-| `src/agents.rs` | `src/model_init/` |
+| `src/agents.rs` | `src/model_init/`, `src/utils/modify.jl` |
 | `src/firms.rs` | `src/agent_actions/firms.jl`, `finance_insolvent_firms!` |
 | `src/households.rs` | `src/agent_actions/households.jl` |
 | `src/bank.rs` | `src/agent_actions/bank.jl`, `central_bank.jl` |
