@@ -13,9 +13,15 @@ The files in data and tests/data are converted from files of BeforeIT.jl
 The changes with respect to BeforeIT.jl are described in README.md, section
 "Differences from BeforeIT.jl".
 
-src/plots.rs also follows errorline of StatsPlots.jl and mean and std of
-NaNMath.jl, and uses the colours of the default palette of Plots.jl
-(computed by PlotUtils.jl); these packages are under the MIT License.
+src/plots.rs also follows errorline of StatsPlots.jl, mean and std of
+NaNMath.jl, the default attributes, minor ticks, axis widening and legend
+placement of Plots.jl, the gradients of PlotUtils.jl and ColorSchemes.jl
+and the bar plots of Makie.jl, and uses the colours of the default palette
+of Plots.jl (computed by PlotUtils.jl) and named colours of Colors.jl;
+these packages are under the MIT License. The gradients RdBu and YlOrRd
+are ColorBrewer colour schemes, as ColorSchemes.jl stores them:
+Copyright (c) 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania
+State University, licensed under the Apache License, Version 2.0.
 
 This product is not affiliated with or endorsed by the authors of
 BeforeIT.jl, Banca d'Italia or the Bank of England.

@@ -123,6 +123,8 @@ cargo run --release --example austria
 | `plots::plot_data_vectors(&[models_a, models_b], DEFAULT_TITLEFONT, &DEFAULT_QUANTITIES)?` | `Bit.plot_data_vectors([models_a, models_b])` |
 | `plots::plot_model_vs_real(&model, &real, "real_gdp_quarterly", true)?` | `Bit.plot_model_vs_real(model, real, "real_gdp_quarterly")` |
 | `plots::layout_svg(&ps, (3, 3), DEFAULT_SIZE)?`, `p.to_svg(DEFAULT_SIZE)?` | `plot(ps..., layout = (3, 3))`, `savefig(p, "p.svg")` |
+| `let mut p = plots::Plot::new("gdp"); p.add_line(x, y).label = Some("baseline".into());` | `p = plot(x, y, title = "gdp", label = "baseline")` |
+| `p.add_errorline(x, runs, plots::ErrorType::Sem)?;` | `errorline!(p, x, runs, errortype = :sem)` |
 
 `step` calls the rules in the order of BeforeIT `src/one_step.jl`. Each rule
 is a public method named after its Julia function without the `!`, for
@@ -312,7 +314,12 @@ deviation (StatsPlots' `errorline`), `plot_data_vectors` several such
 ensembles in one plot, and `plot_model_vs_real` predictions against the
 data. They return `Plot` values with the series, colours, titles, limits
 and ticks that BeforeIT.jl hands to Plots.jl; `layout_svg` and
-`Plot::to_svg` draw them as SVG.
+`Plot::to_svg` draw them as SVG. For the plots of BeforeIT's examples,
+`Plot::new` starts an empty plot with Plots.jl's defaults, to which
+`add_line`, `add_errorline` (standard deviation or standard error),
+`add_hline` and `annotate` add elements; `Plot::heatmap` and `Plot::bars`
+make heatmaps and bar plots, and `layout_svg_with_title` puts a title over
+a layout.
 
 `cargo doc --open` shows the documentation of every type and rule.
 
@@ -425,12 +432,14 @@ from the `libm` crate, not from the system's math library.
 10. **Plots.** The plot functions return the content of the plots (series,
     bands, colours of Plots.jl's default palette, titles, font sizes,
     limits, ticks, legend) instead of Plots.jl objects, and `plotters`
-    draws them as SVG: fonts, margins, axes and the format of the tick
-    numbers are those of `plotters` (large and small numbers on the y axis
-    with a power of ten, such as `3.95e11`); tick labels are not rotated,
-    and a line that leaves the x limits ends at its last point inside them.
-    The functions return an error where Julia throws, also for a `missing`
-    value of the data within the period of the predictions in
+    draws them as SVG. Automatic axis limits are widened by 6 % and the
+    legend goes to the least crowded corner, as in Plots.jl; fonts,
+    margins, axes, dash patterns and the format of the tick numbers are
+    those of `plotters` (large and small numbers with a power of ten, such
+    as `3.95e11`); tick labels are not rotated, a line that leaves the x
+    limits ends at its last point inside them, and heatmaps have no colour
+    bar. The functions return an error where Julia throws, also for a
+    `missing` value of the data within the period of the predictions in
     `plot_model_vs_real`.
 
 ## Where BeforeIT.jl differs from the paper
@@ -603,8 +612,11 @@ keeps:
   and its handling of the shape of `y`; the titles, series, colours and
   time ranges of the four functions; the limits and year ticks of
   `plot_model_vs_real` against values computed by hand, with and without
-  `crop`; and that the SVG drawings contain the titles, bands, labels and
-  ticks. The drawings were also checked by eye in a browser.
+  `crop`; the colours of the gradients RdBu and YlOrRd and of heatmap
+  cells; the corner of the legend; the ticks and minor ticks of linear and
+  logarithmic axes and the widening of their limits; and that the SVG
+  drawings contain the titles, bands, labels, ticks, annotations and
+  markers. The drawings were also checked by eye in a browser.
 - [`tests/datasets.rs`](tests/datasets.rs): each data set runs, has the
   values of its file, and is read like BeforeIT's dictionaries (defaults of
   the optional parameters, counts stored as floats, column matrices as
@@ -660,7 +672,7 @@ tests with all features on Rust 1.88.
 | `src/correlation.rs` | `src/utils/correlation_utils.jl` |
 | `src/analysis.rs` | `src/utils/analysis_utils.jl`, `error_tables.jl`, `save_all_predictions.jl` |
 | `src/diff_transform.rs` | `src/utils/diff_transform.jl` |
-| `src/plots.rs` | `ext/BeforeITPlots/BeforeITPlots.jl`; `errorline` of StatsPlots.jl; `mean` and `std` of NaNMath.jl; the default palette of Plots.jl |
+| `src/plots.rs` | `ext/BeforeITPlots/BeforeITPlots.jl`; `errorline` of StatsPlots.jl; `mean` and `std` of NaNMath.jl; the default palette, attributes, minor ticks, axis widening and legend placement of Plots.jl; the gradients of PlotUtils.jl and ColorSchemes.jl; named colours of Colors.jl; `barplot` of Makie.jl |
 | `src/calibration.rs`, `data/italy/calibration.json` | `src/utils/calibration.jl`, `_calibration_steady_state.jl`, `standard_calibration_data.jl`, `data/italy/calibration/` |
 | `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
 | `src/model_extensions/` | `src/model_extensions/` |
