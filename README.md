@@ -1,0 +1,302 @@
+# port-beforeit
+
+[![CI](https://github.com/ramonfueglister/port-beforeit/actions/workflows/ci.yml/badge.svg)](https://github.com/ramonfueglister/port-beforeit/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![MSRV: 1.88](https://img.shields.io/badge/MSRV-1.88-orange.svg)](Cargo.toml)
+
+An unofficial Rust port of [BeforeIT.jl](https://github.com/bancaditalia/BeforeIT.jl),
+the Julia implementation of the agent-based macroeconomic model of Poledna,
+Miess, Hommes and Rabitsch (2023),
+[*Economic forecasting with an agent-based model*](https://doi.org/10.1016/j.euroecorev.2022.104306),
+European Economic Review 151, 104306.
+
+> [!IMPORTANT]
+> This is an independent port. It is not affiliated with or endorsed by the
+> authors of the paper, the developers of BeforeIT.jl, Banca d'Italia or the
+> Bank of England. The reference implementation is BeforeIT.jl; errors in this
+> port are its own.
+
+## The model
+
+The model simulates an economy quarter by quarter. Its agents are households
+(employed and unemployed workers, inactive persons, the owners of the firms
+and the owner of the bank), firms, a bank, a central bank, the government and
+the rest of the world. Every quarter the agents form expectations with AR(1)
+models that are estimated anew on the past data, firms set prices and plan
+production, and the credit, labour and goods markets match buyers and sellers
+by search and matching. After each quarter the model records national
+accounts series such as GDP, consumption, investment, exports and imports.
+
+This crate translates the model of BeforeIT.jl at commit
+[`0926398`](https://github.com/bancaditalia/BeforeIT.jl/tree/09263989b56bd2d58c28657bb8e940142d995cf4)
+(29 October 2026, newer than release v0.6.0) function by function. Functions
+and variables keep their Julia names, so every rule can be read side by side
+with the original. The documentation of each rule names the Julia function it
+translates and the equations it implements, numbered as in the online
+appendix of the paper (A.1 to A.84,
+[supplementary material](https://doi.org/10.5281/zenodo.7271552)).
+
+## Status
+
+| | |
+|---|---|
+| Ported | Model setup (`src/model_init/`), all agent rules (`src/agent_actions/`), the credit, labour and goods markets (`src/markets/`), `step!` with shocks, `run!`, data collection (`src/utils/data.jl`), and the parts of `estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl`, `randpl.jl`, `opt.jl` and `positive.jl` that these use |
+| One bank | As in the paper. BeforeIT.jl's option of several banks (`n_banks`) and its per-bank data series are not ported. |
+| Not ported | The model extensions CANVAS (`init_CANVAS.jl`) and growth-rate model (`init_growth_rate_model.jl`); the options `omega_pi` and `overdrafts_in_capital_ratio` (the port behaves as BeforeIT.jl with their defaults, 0 and `false`) and `theta_calvo`, which only CANVAS uses; calibration, `estimate_taylor_rule`, prediction pipelines and forecast evaluation; `ensemblerun!` and multithreading; the built-in data sets such as `AUSTRIA2010Q1`; the package extensions in `ext/` |
+
+## Installation
+
+The crate is not on crates.io. Add it as a Git dependency:
+
+```toml
+[dependencies]
+beforeit = { git = "https://github.com/ramonfueglister/port-beforeit" }
+```
+
+It needs Rust 1.88 or newer. Its only dependency is
+[`libm`](https://crates.io/crates/libm), and it contains no `unsafe` code.
+
+## Usage
+
+```rust
+use beforeit::{InitialConditions, Model, Parameters, Xoshiro};
+
+/// Real GDP of the initial state and of 20 simulated quarters.
+fn real_gdp(p: &Parameters, ic: &InitialConditions) -> Result<Vec<f64>, String> {
+    let mut rng = Xoshiro::seed_from_u64(1);
+    let mut model = Model::new(p, ic, &mut rng)?;
+    model.run(20, &mut rng);
+    Ok(model.data.real_gdp)
+}
+```
+
+The crate contains no calibration. `Parameters` and `InitialConditions` are
+plain structs whose fields have the names of the keys of BeforeIT.jl's
+`parameters` and `initial_conditions`; tables D.2, D.3, E.1 and E.2 of the
+online appendix explain them. The example loads the Austrian calibration for
+2010Q1, which the tests take from BeforeIT.jl (see
+[`tests/data`](tests/data/README.md)), simulates 20 quarters like the example
+in the README of BeforeIT.jl, and prints real GDP:
+
+```sh
+cargo run --release --example austria
+```
+
+| Rust | BeforeIT.jl |
+|---|---|
+| `Model::new(&p, &ic, &mut rng)` | `Model(parameters, initial_conditions)` |
+| `model.step(&mut rng)` | `step!(model)` |
+| `model.step_with_shock(&mut rng, shock)` | `step!(model; shock!)` |
+| `model.collect_data()` | `collect_data!(model)` |
+| `model.run(T, &mut rng)` | `run!(model, T)` |
+| `model.firms.Y_i[i]`, `model.cb.r_bar`, ... | `model.firms.Y_i[i]`, `model.cb.r_bar`, ... |
+| `model.data.real_gdp`, ... | `model.data.real_gdp`, ... |
+
+`step` calls the rules in the order of BeforeIT `src/one_step.jl`. Each rule
+is a public method named after its Julia function without the `!`, for
+example `set_firms_production` for `set_firms_production!`, so a quarter can
+also be run rule by rule. The state of all agents is public, one list per
+variable as in the Julia code: firm `i` is entry `i` of every firm list.
+Indices start at 0.
+
+A shock is a closure that `step_with_shock` calls right after the central
+bank has set the policy rate, where `step!` calls `shock!`. BeforeIT.jl's
+`InterestRateShock(0.01, 4)` becomes:
+
+```rust
+use beforeit::{Model, Xoshiro};
+
+/// Simulates `quarters` quarters with the policy rate at 1% while the
+/// model time `agg.t` is at most 4.
+fn run_with_rate_shock(model: &mut Model, quarters: usize, rng: &mut Xoshiro) {
+    for _ in 0..quarters {
+        model.step_with_shock(rng, |m| {
+            if m.agg.t <= 4 {
+                m.cb.r_bar = 0.01;
+            }
+        });
+        model.collect_data();
+    }
+}
+```
+
+`cargo doc --open` shows the documentation of every type and rule.
+
+## Randomness and reproducibility
+
+The model draws all random numbers through the trait `Randomness`. The crate
+has two implementations:
+
+- `Xoshiro`, the generator xoshiro256\*\* seeded with SplitMix64. The same
+  seed gives the same run. `Model` implements `Clone` and `PartialEq`, and
+  `Xoshiro::state` and `Xoshiro::from_state` save and restore the generator,
+  so a run can be continued or branched exactly.
+- `Deterministic`, the replacements of BeforeIT
+  `test/deterministic/make_model_deterministic.jl`: no randomness, for the
+  comparison with the reference values of the authors' MATLAB code.
+
+Another generator can be used by implementing the three methods `randn`,
+`rand` and `rand_below`. Mathematical functions such as `exp` and `log` come
+from the `libm` crate, not from the system's math library.
+
+## Differences from BeforeIT.jl
+
+1. **Minimum per firm in desired investment and employment (A.14, A.22).**
+   BeforeIT `src/agent_actions/firms.jl` computes
+   `min(Q_s_i, firms.K_i .* firms.kappa_i)` without the dot in lines 18 and
+   24. Julia's `min` of two vectors compares them as a whole, in
+   lexicographic order, and returns one of them, so either every firm uses
+   its expected sales or every firm uses its capacity, depending on the first
+   firm in which the two differ. The paper and the authors' MATLAB code
+   (`test/matlab_code/detabm.m`, lines 116 and 126) take the minimum firm by
+   firm, as BeforeIT.jl does itself for intermediate inputs (`min.` in line
+   21, A.18). The port takes the minimum firm by firm in all three places.
+2. **Random numbers.** The distributions are those of the Julia code, the
+   numbers are not: Julia's default generator is Xoshiro256++ and draws
+   normal numbers with the ziggurat method, the port uses xoshiro256\*\*,
+   Box–Muller and Lemire's method for integers. Sellers are drawn from
+   cumulative sums of their weights instead of with WeightVectors.jl, and
+   `randpl` shuffles where Julia calls `randperm`. Where Julia removes
+   entries from a list with `ufilter!`, which moves the last entry into the
+   gap, the port keeps the order, like `filter!` in BeforeIT's deterministic
+   test. These lists are either shuffled before every pass or only map the
+   draws of a weighted sampler to the sellers, so the distribution of the
+   outcomes is the same. Runs with randomness therefore agree with
+   BeforeIT.jl in distribution, not number by number.
+3. **Floating point.** The port computes in `f64`, BeforeIT.jl's default
+   `typeFloat`. Sums over lists use the order of Julia's `sum`: lists longer
+   than 1024 numbers are split in halves until blocks of at most 1024
+   numbers remain, and each block is added from left to right. Julia may
+   still reorder additions inside a block (`@simd`), and it calls BLAS for
+   dot products and norms, which the port adds from left to right. Results
+   can therefore differ from BeforeIT.jl in the last digits. The port has
+   not been run side by side with Julia; it is checked against the reference
+   values that the tests of BeforeIT.jl use (see [Verification](#verification)).
+4. **Errors.** `Model::new` checks its inputs and returns an error message
+   where the Julia code would throw or `randpl` would not terminate, for
+   example for lists of the wrong length, a matrix `C` that is not positive
+   definite, or more jobs than workers. `Model::step` panics where the Julia
+   code throws during a step; its documentation lists the cases.
+
+## Where BeforeIT.jl differs from the paper
+
+In these places the code of BeforeIT.jl differs from the online appendix, and
+the port follows the code. They are the ones we found; the list may not be
+complete.
+
+| | Online appendix | BeforeIT.jl and the port |
+|---|---|---|
+| Price index (A.12) | Weighted by the sales of the domestic firms and of the foreign producers | Weighted by the production of the domestic firms, as in the authors' MATLAB code (`detabm.m`, lines 301 and 302) |
+| Policy rate (A.69) | Taylor rule without a lower bound | Not below 0 (`pos` in `taylor_rule`); the MATLAB code has no lower bound (`detabm.m`, line 98) |
+| Choice of a seller (A.1.1) | The size of a firm is its production | The size of a firm is its production plus its inventories, as in the MATLAB code (`search_and_matching_det.m`, line 10) |
+
+## Verification
+
+`cargo test --release` runs these tests:
+
+- [`tests/matlab_reference.rs`](tests/matlab_reference.rs), as BeforeIT.jl's
+  `test/deterministic`: without randomness, the initial state, every rule of
+  one quarter, and the aggregates after quarters 1 and 5 against the values
+  of the authors' MATLAB code, with the tolerances of BeforeIT.jl's tests. A
+  stricter test requires every compared quantity to lie within 1e-10
+  (relative) of the MATLAB values; the largest deviation is 6.5e-13, for the
+  series of nominal capital formation over five quarters.
+- [`tests/accounting_identities.rs`](tests/accounting_identities.rs), as
+  `test/accounting_identities.jl`: in runs of three quarters with three
+  seeds, income equals production and nominal and real GDP equal the sum of
+  their uses, summed over the initial state and the three quarters within
+  the authors' tolerance of 1e-8, and the balance sheets of the central bank
+  and the bank add up within 1e-8. Each of the three identities also holds
+  in every single quarter within 1e-13 of nominal GDP.
+- [`tests/stochastic.rs`](tests/stochastic.rs): after one goods market, ten
+  quantities against the means and standard deviations of the original
+  implementation given in `test/markets/search_and_matching.jl`: one run
+  within three standard deviations, as there, and 50 runs whose mean lies
+  within three standard errors and whose standard deviation lies between 0.6
+  and 1.4 times the original's. Also: the same seed gives the same run, and a
+  saved state continues exactly like the original run.
+- [`tests/agent_actions.rs`](tests/agent_actions.rs) and
+  [`tests/estimate.rs`](tests/estimate.rs): single rules and the AR(1)
+  estimate with the numbers of `test/agent_actions` and
+  `test/utils/nfvar3_and_estimate.jl`.
+- [`tests/invalid_inputs.rs`](tests/invalid_inputs.rs): inputs that
+  `Model::new` rejects, and borderline inputs that it accepts like the Julia
+  code.
+- Unit tests in `src/`: the Julia semantics of `min`, `max`, `round`, `pos`
+  and the order of `sum`; xoshiro256\*\* and SplitMix64 against reference
+  outputs; the distributions of the draws; the Cholesky factor; `rfvar3`
+  against the values of BeforeIT.jl's tests; the shocks `epsilon` against the
+  MATLAB values in `test/deterministic/epsilon.jl`.
+
+The reference values are converted from files of BeforeIT.jl by
+[`tests/data/convert.py`](tests/data/convert.py), which reproduces them
+byte for byte. CI checks the formatting and runs `cargo clippy` and the
+tests on stable Rust, and the tests on Rust 1.88.
+
+## Layout
+
+| Rust | BeforeIT.jl |
+|---|---|
+| `src/lib.rs`: `Model`, `step`, `run` | `src/model_init/init.jl`, `agents.jl`, `src/one_step.jl`, `src/one_simulation.jl` |
+| `src/params.rs` | the inputs and `src/model_init/init_properties.jl` |
+| `src/agents.rs` | `src/model_init/` |
+| `src/firms.rs` | `src/agent_actions/firms.jl`, `finance_insolvent_firms!` |
+| `src/households.rs` | `src/agent_actions/households.jl` |
+| `src/bank.rs` | `src/agent_actions/bank.jl`, `central_bank.jl` |
+| `src/government.rs` | `src/agent_actions/government.jl` |
+| `src/rotw.rs` | `src/agent_actions/rotw.jl` |
+| `src/aggregates.rs` | `src/agent_actions/estimations.jl`, `aggregates.jl`, `set_epsilon!` |
+| `src/markets.rs` | `src/markets/` |
+| `src/data.rs` | `src/utils/data.jl` |
+| `src/estimate.rs` | `src/utils/estimate.jl`, `nfvar3.jl`, `julia_svd.jl`, `epsilon.jl` |
+| `src/random.rs` | `src/utils/randpl.jl`, `fshuffle!`, `FixedSizeWeightVector` of WeightVectors.jl, `test/deterministic/make_model_deterministic.jl` |
+| `src/julia.rs` | Julia's `min`, `max`, `round` and `sum`; `src/utils/positive.jl` |
+
+## Citation
+
+This is an unofficial port. If you use it, please cite the paper on the model
+and BeforeIT.jl:
+
+```bibtex
+@article{poledna2023economic,
+  title   = {Economic forecasting with an agent-based model},
+  author  = {Poledna, Sebastian and Miess, Michael Gregor and Hommes, Cars and Rabitsch, Katrin},
+  journal = {European Economic Review},
+  volume  = {151},
+  pages   = {104306},
+  year    = {2023},
+  doi     = {10.1016/j.euroecorev.2022.104306}
+}
+
+@article{meligrana2026beforeit,
+  title={BeforeIT.jl: High-Performance Agent-Based Macroeconomics Made Easy},
+  author={Meligrana, Adriano and Devetak, Mitja and Hoekstra, Steven and Reiter, Oliver and Minnella, Enrico and Poledna, Sebastian and Bardoscia, Marco and Glielmo, Aldo},
+  journal={arXiv preprint arXiv:2502.13267},
+  year={2026}
+}
+```
+
+The second entry is the citation that BeforeIT.jl asks for in its README.
+[`CITATION.cff`](CITATION.cff) has the same references in machine-readable
+form.
+
+## License
+
+Apache License 2.0, like BeforeIT.jl; see [`LICENSE`](LICENSE). The port is a
+derivative work of BeforeIT.jl, Copyright 2024 Banca d'Italia and the authors;
+see [`NOTICE`](NOTICE). The files in `tests/data` are converted from files of
+BeforeIT.jl. The online appendix of the paper (CC BY-NC-ND 4.0) is cited by
+its equation and table numbers; its text is not reproduced.
+
+The disclaimer of BeforeIT.jl applies to the model: "All views expressed are
+personal views, and do not necessarily reflect the official policy or
+position of Banca d’Italia or those of the Bank of England or its
+committees."
+
+## Acknowledgements
+
+The model is the work of Sebastian Poledna, Michael Gregor Miess, Cars Hommes
+and Katrin Rabitsch; BeforeIT.jl is the work of its authors listed in its
+README. This port was written with the help of Claude Code, an AI coding
+assistant. Every rule was translated from the Julia source and is checked
+against the reference values described under [Verification](#verification).

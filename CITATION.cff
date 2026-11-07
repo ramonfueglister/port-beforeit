@@ -1,0 +1,79 @@
+cff-version: 1.2.0
+message: >-
+  This is an unofficial Rust port of BeforeIT.jl. If you use it, please cite
+  the paper on the model (preferred citation) and BeforeIT.jl (references).
+title: "port-beforeit: an unofficial Rust port of BeforeIT.jl"
+type: software
+authors:
+  - alias: ramonfueglister
+repository-code: "https://github.com/ramonfueglister/port-beforeit"
+license: Apache-2.0
+version: 0.1.0
+keywords:
+  - agent-based model
+  - macroeconomics
+  - economic forecasting
+  - Rust
+preferred-citation:
+  type: article
+  title: "Economic forecasting with an agent-based model"
+  authors:
+    - family-names: Poledna
+      given-names: Sebastian
+    - family-names: Miess
+      given-names: Michael Gregor
+    - family-names: Hommes
+      given-names: Cars
+    - family-names: Rabitsch
+      given-names: Katrin
+  journal: European Economic Review
+  volume: 151
+  start: "104306"
+  year: 2023
+  doi: 10.1016/j.euroecorev.2022.104306
+references:
+  - type: article
+    title: "BeforeIT.jl: High-Performance Agent-Based Macroeconomics Made Easy"
+    authors:
+      - family-names: Meligrana
+        given-names: Adriano
+      - family-names: Devetak
+        given-names: Mitja
+      - family-names: Hoekstra
+        given-names: Steven
+      - family-names: Reiter
+        given-names: Oliver
+      - family-names: Minnella
+        given-names: Enrico
+      - family-names: Poledna
+        given-names: Sebastian
+      - family-names: Bardoscia
+        given-names: Marco
+      - family-names: Glielmo
+        given-names: Aldo
+    journal: arXiv preprint
+    year: 2026
+    url: "https://arxiv.org/abs/2502.13267"
+  - type: software
+    title: BeforeIT.jl
+    authors:
+      - name: "Banca d'Italia and the authors of BeforeIT.jl"
+    repository-code: "https://github.com/bancaditalia/BeforeIT.jl"
+    commit: 09263989b56bd2d58c28657bb8e940142d995cf4
+    license: Apache-2.0
+  - type: generic
+    title: >-
+      Supplementary material for the article "Economic forecasting with an
+      agent-based model"
+    authors:
+      - family-names: Poledna
+        given-names: Sebastian
+      - family-names: Miess
+        given-names: Michael Gregor
+      - family-names: Hommes
+        given-names: Cars
+      - family-names: Rabitsch
+        given-names: Katrin
+    year: 2022
+    doi: 10.5281/zenodo.7271552
+    license: CC-BY-NC-ND-4.0

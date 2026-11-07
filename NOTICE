@@ -1,0 +1,17 @@
+port-beforeit
+Copyright 2026 the port-beforeit contributors
+
+This product is a translation into Rust of BeforeIT.jl
+(https://github.com/bancaditalia/BeforeIT.jl) at commit
+09263989b56bd2d58c28657bb8e940142d995cf4.
+BeforeIT.jl: Copyright 2024 - Banca d'Italia and the authors.
+Licensed under the Apache License, Version 2.0.
+
+The files in tests/data are converted from files of BeforeIT.jl
+(data/austria and test/matlab_code); see tests/data/README.md.
+
+The changes with respect to BeforeIT.jl are described in README.md, section
+"Differences from BeforeIT.jl".
+
+This product is not affiliated with or endorsed by the authors of
+BeforeIT.jl, Banca d'Italia or the Bank of England.

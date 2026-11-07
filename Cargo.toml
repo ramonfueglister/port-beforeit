@@ -1,0 +1,19 @@
+[package]
+name = "beforeit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Unofficial Rust port of BeforeIT.jl, the Julia implementation of the agent-based macroeconomic model of Poledna, Miess, Hommes and Rabitsch (2023)"
+license = "Apache-2.0"
+repository = "https://github.com/ramonfueglister/port-beforeit"
+readme = "README.md"
+keywords = ["agent-based-model", "macroeconomics", "economics", "simulation", "forecasting"]
+categories = ["simulation", "science"]
+include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE", "NOTICE", "CITATION.cff"]
+publish = false
+
+[dependencies]
+libm = "0.2.16"
+
+[dev-dependencies]
+serde_json = "1.0.154"
