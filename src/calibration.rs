@@ -163,6 +163,42 @@ impl Date {
         let (year, month, day) = civil_from_days(days);
         Date { year, month, day }
     }
+
+    /// Julia `date + Month(months)`: the same day `months` months later (or
+    /// earlier), the last day of that month if it is shorter.
+    pub fn add_months(self, months: i64) -> Date {
+        let m = i64::from(self.month) - 1 + months;
+        let year = self.year + m.div_euclid(12) as i32;
+        let month = m.rem_euclid(12) as u32 + 1;
+        let mut day = self.day;
+        while !is_valid(year, month, day) {
+            day -= 1;
+        }
+        Date { year, month, day }
+    }
+
+    /// Julia `lastdayofmonth(date)`.
+    pub fn last_day_of_month(self) -> Date {
+        let mut day = 31;
+        while !is_valid(self.year, self.month, day) {
+            day -= 1;
+        }
+        Date { day, ..self }
+    }
+
+    /// Julia `collect(first:Month(months):last)`: `first`, `first +
+    /// Month(months)`, `first + Month(2 · months)`, … up to `last`.
+    ///
+    /// # Panics
+    ///
+    /// If `months` is not positive.
+    pub fn every_months(first: Date, last: Date, months: i64) -> Vec<Date> {
+        assert!(months > 0, "the step must be at least one month");
+        (0..)
+            .map(|k| first.add_months(k * months))
+            .take_while(|&d| d <= last)
+            .collect()
+    }
 }
 
 /// Whether the month and the day exist in the proleptic Gregorian calendar.
@@ -270,13 +306,7 @@ pub fn table_from_json(text: &str) -> Result<Table, String> {
 /// `{"size": [...], "data": [...]}` in column-major order, `missing` as
 /// `null` and NaN and infinities as the strings "NaN", "Inf" and "-Inf".
 pub fn table_to_json(t: &Table) -> String {
-    let entry = |x: &Option<f64>| match *x {
-        None => serde_json::Value::Null,
-        Some(v) if v.is_nan() => "NaN".into(),
-        Some(v) if v == f64::INFINITY => "Inf".into(),
-        Some(v) if v == f64::NEG_INFINITY => "-Inf".into(),
-        Some(v) => v.into(),
-    };
+    let entry = |x: &Option<f64>| x.map_or(serde_json::Value::Null, json_number);
     let o: serde_json::Map<String, serde_json::Value> = t
         .iter()
         .map(|(k, a)| {
@@ -292,6 +322,35 @@ pub fn table_to_json(t: &Table) -> String {
         })
         .collect();
     serde_json::Value::Object(o).to_string()
+}
+
+/// A number as JSON: NaN and infinities as the strings "NaN", "Inf" and
+/// "-Inf", which JSON numbers cannot express.
+pub(crate) fn json_number(x: f64) -> serde_json::Value {
+    if x.is_nan() {
+        "NaN".into()
+    } else if x == f64::INFINITY {
+        "Inf".into()
+    } else if x == f64::NEG_INFINITY {
+        "-Inf".into()
+    } else {
+        x.into()
+    }
+}
+
+/// Reads a number written by [`json_number`].
+pub(crate) fn json_float(x: &serde_json::Value, what: &str) -> Result<f64, String> {
+    match x {
+        serde_json::Value::String(s) => match s.as_str() {
+            "NaN" => Ok(f64::NAN),
+            "Inf" => Ok(f64::INFINITY),
+            "-Inf" => Ok(f64::NEG_INFINITY),
+            _ => Err(format!("{what}: {s} is not a number")),
+        },
+        _ => x
+            .as_f64()
+            .ok_or_else(|| format!("{what}: {x} is not a number")),
+    }
 }
 
 impl CalibrationData {
@@ -374,16 +433,7 @@ fn array(v: &serde_json::Value, what: &str) -> Result<Array, String> {
     let entry = |x: &serde_json::Value| -> Result<Option<f64>, String> {
         match x {
             serde_json::Value::Null => Ok(None),
-            serde_json::Value::String(s) => match s.as_str() {
-                "NaN" => Ok(Some(f64::NAN)),
-                "Inf" => Ok(Some(f64::INFINITY)),
-                "-Inf" => Ok(Some(f64::NEG_INFINITY)),
-                _ => Err(format!("{what}: {s} is not a number")),
-            },
-            _ => x
-                .as_f64()
-                .map(Some)
-                .ok_or_else(|| format!("{what}: {x} is not a number")),
+            _ => json_float(x, what).map(Some),
         }
     };
     if let serde_json::Value::Object(o) = v {

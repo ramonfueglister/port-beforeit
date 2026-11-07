@@ -30,6 +30,7 @@
 #![allow(non_snake_case, clippy::needless_range_loop)]
 
 pub mod agents;
+pub mod analysis;
 pub mod calibration;
 pub mod correlation;
 pub mod data;

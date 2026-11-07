@@ -67,3 +67,21 @@ python3 tests/data/evaluation_reference.py tests/data/evaluation_reference.json
 `tests/evaluation.rs` compares the port with it. As for the calibration,
 this checks that both read the Julia code the same way, not against values
 of Julia.
+
+## Reference values of the error tables
+
+`analysis_reference.json` holds the results of `analysis_reference.py`, an
+independent NumPy/SciPy translation of BeforeIT's `error_tables.jl` and
+`analysis_utils.jl`: the text of every table that `tests/analysis.rs`
+writes, computed from the predictions that the port writes in that test.
+It also holds the series of those predictions that the tables read, and the
+test checks that the run reproduces them. To recompute it, run the test
+once (it leaves its files in `target/tmp/analysis`), then:
+
+```sh
+python3 tests/data/analysis_reference.py target/tmp/analysis data/italy/calibration.json tests/data/analysis_reference.json
+```
+
+The predictions themselves are the port's, so the comparison checks the
+tables and the benchmarks, not the model runs; `tests/predictions.rs`
+checks the predictions against values of Julia.

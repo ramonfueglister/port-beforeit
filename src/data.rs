@@ -1,6 +1,7 @@
 //! Time series of national accounts variables and of each bank, BeforeIT
 //! `src/utils/data.jl`.
 
+use crate::calibration::{json_float, json_number};
 use crate::julia::{sum, sum_by};
 use crate::{AbstractModel, Extension};
 
@@ -50,43 +51,80 @@ pub struct Data {
     pub roe_per_bank: Vec<Vec<f64>>,
 }
 
-impl Data {
-    /// The national accounts series called `name`, Julia
-    /// `getproperty(data, Symbol(name))` for the fields with one number per
-    /// collection, or `None` if there is no such series.
-    pub fn series_by_name(&self, name: &str) -> Option<&[f64]> {
-        Some(match name {
-            "nominal_gdp" => &self.nominal_gdp,
-            "real_gdp" => &self.real_gdp,
-            "nominal_gva" => &self.nominal_gva,
-            "real_gva" => &self.real_gva,
-            "nominal_household_consumption" => &self.nominal_household_consumption,
-            "real_household_consumption" => &self.real_household_consumption,
-            "nominal_government_consumption" => &self.nominal_government_consumption,
-            "real_government_consumption" => &self.real_government_consumption,
-            "nominal_capitalformation" => &self.nominal_capitalformation,
-            "real_capitalformation" => &self.real_capitalformation,
-            "nominal_fixed_capitalformation" => &self.nominal_fixed_capitalformation,
-            "real_fixed_capitalformation" => &self.real_fixed_capitalformation,
-            "nominal_fixed_capitalformation_dwellings" => {
-                &self.nominal_fixed_capitalformation_dwellings
+/// The fields of [`Data`] with one number per collection, and those with a
+/// list per collection: accessors by name and the JSON of
+/// [`DataVector::to_json`].
+macro_rules! fields {
+    (series: $($s:ident),* ; lists: $($l:ident),* $(,)?) => {
+        impl Data {
+            /// The national accounts series called `name`, Julia
+            /// `getproperty(data, Symbol(name))` for the fields with one
+            /// number per collection, or `None` if there is no such series.
+            pub fn series_by_name(&self, name: &str) -> Option<&[f64]> {
+                match name {
+                    $(stringify!($s) => Some(&self.$s),)*
+                    _ => None,
+                }
             }
-            "real_fixed_capitalformation_dwellings" => &self.real_fixed_capitalformation_dwellings,
-            "nominal_exports" => &self.nominal_exports,
-            "real_exports" => &self.real_exports,
-            "nominal_imports" => &self.nominal_imports,
-            "real_imports" => &self.real_imports,
-            "operating_surplus" => &self.operating_surplus,
-            "compensation_employees" => &self.compensation_employees,
-            "wages" => &self.wages,
-            "taxes_production" => &self.taxes_production,
-            "gdp_deflator_growth_ea" => &self.gdp_deflator_growth_ea,
-            "real_gdp_ea" => &self.real_gdp_ea,
-            "euribor" => &self.euribor,
-            _ => return None,
-        })
-    }
+
+            fn to_json_value(&self) -> serde_json::Value {
+                let numbers = |v: &[f64]| -> serde_json::Value {
+                    v.iter().map(|&x| json_number(x)).collect()
+                };
+                let mut o = serde_json::Map::new();
+                o.insert("collection_time".into(), self.collection_time.clone().into());
+                $(o.insert(stringify!($s).into(), numbers(&self.$s));)*
+                $(o.insert(
+                    stringify!($l).into(),
+                    self.$l.iter().map(|r| numbers(r)).collect(),
+                );)*
+                serde_json::Value::Object(o)
+            }
+
+            fn from_json_value(v: &serde_json::Value, what: &str) -> Result<Data, String> {
+                let o = v.as_object().ok_or_else(|| format!("{what} is not an object"))?;
+                let get = |key: &str| {
+                    o.get(key)
+                        .and_then(|x| x.as_array())
+                        .ok_or_else(|| format!("{what}.{key} is missing or not a list"))
+                };
+                let numbers = |key: &str, x: &[serde_json::Value]| -> Result<Vec<f64>, String> {
+                    x.iter().map(|x| json_float(x, &format!("{what}.{key}"))).collect()
+                };
+                let collection_time = get("collection_time")?
+                    .iter()
+                    .map(|x| x.as_u64().map(|t| t as usize))
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| format!("{what}.collection_time: not a list of counts"))?;
+                Ok(Data {
+                    collection_time,
+                    $($s: numbers(stringify!($s), get(stringify!($s))?)?,)*
+                    $($l: get(stringify!($l))?
+                        .iter()
+                        .map(|r| {
+                            let r = r.as_array().ok_or_else(|| {
+                                format!("{what}.{}: not a list of lists", stringify!($l))
+                            })?;
+                            numbers(stringify!($l), r)
+                        })
+                        .collect::<Result<_, _>>()?,)*
+                })
+            }
+        }
+    };
 }
+
+fields!(
+    series: nominal_gdp, real_gdp, nominal_gva, real_gva, nominal_household_consumption,
+    real_household_consumption, nominal_government_consumption, real_government_consumption,
+    nominal_capitalformation, real_capitalformation, nominal_fixed_capitalformation,
+    real_fixed_capitalformation, nominal_fixed_capitalformation_dwellings,
+    real_fixed_capitalformation_dwellings, nominal_exports, real_exports, nominal_imports,
+    real_imports, operating_surplus, compensation_employees, wages, taxes_production,
+    gdp_deflator_growth_ea, real_gdp_ea, euribor;
+    lists: nominal_sector_gva, real_sector_gva, credit_new_per_bank, credit_stock_per_bank,
+    equity_per_bank, reserves_per_bank, roe_per_bank,
+);
 
 /// The data of several runs, BeforeIT `DataVector`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -143,6 +181,35 @@ impl DataVector {
     /// The data of each run.
     pub fn iter(&self) -> std::slice::Iter<'_, Data> {
         self.vector.iter()
+    }
+
+    /// Writes the data of all runs as JSON, the port's format for the
+    /// `data_vector` that BeforeIT saves in JLD2 files: `{"vector": [...]}`
+    /// with one object per run, whose keys are the fields of [`Data`]:
+    /// lists of numbers, and lists of lists for the fields per sector and
+    /// per bank. NaN and infinities are written as the strings "NaN",
+    /// "Inf" and "-Inf". [`DataVector::from_json`] reads it back exactly.
+    pub fn to_json(&self) -> String {
+        serde_json::json!({
+            "vector": self.vector.iter().map(Data::to_json_value).collect::<Vec<_>>()
+        })
+        .to_string()
+    }
+
+    /// Reads the JSON of [`DataVector::to_json`].
+    pub fn from_json(text: &str) -> Result<DataVector, String> {
+        let v: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| format!("data vector: {e}"))?;
+        let runs = v
+            .get("vector")
+            .and_then(|x| x.as_array())
+            .ok_or("data vector: no list \"vector\"")?;
+        let vector = runs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| Data::from_json_value(r, &format!("vector[{i}]")))
+            .collect::<Result<_, _>>()?;
+        Ok(DataVector { vector })
     }
 }
 
@@ -426,5 +493,30 @@ impl<X: Extension> AbstractModel<X> {
     /// `collect_data!(model)`; see [`crate::base::collect_data`].
     pub fn collect_data(&mut self) {
         X::collect_data(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_vector_json_round_trip() {
+        let mut d = Data {
+            collection_time: vec![1, 2],
+            real_gdp: vec![1.0, 0.1 + 0.2],
+            euribor: vec![f64::INFINITY, -0.0],
+            equity_per_bank: vec![vec![1.5, 2.5], vec![f64::NEG_INFINITY, 3.0]],
+            ..Data::default()
+        };
+        let dv = DataVector {
+            vector: vec![d.clone(), Data::default()],
+        };
+        assert_eq!(DataVector::from_json(&dv.to_json()).unwrap(), dv);
+        d.wages = vec![f64::NAN];
+        let back = DataVector::from_json(&DataVector { vector: vec![d] }.to_json()).unwrap();
+        assert!(back[0].wages[0].is_nan());
+        assert!(back[0].euribor[1].is_sign_negative());
+        assert!(DataVector::from_json("{\"vector\": [{}]}").is_err());
     }
 }

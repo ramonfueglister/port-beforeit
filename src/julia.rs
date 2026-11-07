@@ -85,6 +85,84 @@ pub fn round(x: f64) -> f64 {
     x.round_ties_even()
 }
 
+/// Julia `round(x; digits)` for `digits ≥ 0` (Base `floatfuncs.jl`,
+/// `_round_digits` and `_round_invstep`): `round(x · 10^digits) /
+/// 10^digits` with ties to even, where `10^digits` is Julia's
+/// `10.0^digits` ([`powi`]); `x` itself if `x` or the result is not finite.
+///
+/// # Panics
+///
+/// If `digits > 308`, where `10^digits` is not finite and Julia takes
+/// another formula, which is not ported.
+pub fn round_digits(x: f64, digits: u32) -> f64 {
+    assert!(
+        digits <= 308,
+        "round(x; digits) is ported for digits <= 308"
+    );
+    if !x.is_finite() {
+        return x;
+    }
+    let invstep = powi(10.0, i64::from(digits));
+    let y = round(x * invstep) / invstep;
+    if y.is_finite() { y } else { x }
+}
+
+/// Julia `string(x)` for a `Float64`, which is also how `print`, string
+/// interpolation and CSV.jl write it (Base `Ryu.writeshortest` with its
+/// default options): the shortest digits that read back as `x`, in fixed
+/// notation if the decimal point falls after at most 6 and before at most
+/// 3 leading zeros (`123456.0`, `0.0001`), otherwise as `d.ddde±n`
+/// (`1.0e6`, `1.0e-5`); always with a decimal point, and `NaN`, `Inf` and
+/// `-Inf` for the special values. The shortest digits are those of Rust's
+/// formatting, which, like Ryu, takes the shortest digits closest to `x`.
+pub fn float_string(x: f64) -> String {
+    if x == 0.0 {
+        return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
+    }
+    if x.is_nan() {
+        return "NaN".into();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Inf" } else { "-Inf" }.into();
+    }
+    // `{:e}` writes the shortest digits as d.ddd and the exponent.
+    let s = format!("{:e}", x.abs());
+    let (mantissa, exp) = s.split_once('e').expect("{:e} writes an exponent");
+    let exp: i32 = exp.parse().expect("{:e} writes an integer exponent");
+    let digits: String = mantissa.chars().filter(|&c| c != '.').collect();
+    let olength = digits.len() as i32;
+    // Ryu's `pt = nexp + olength`: the number of digits before the decimal
+    // point. Ryu also tests a remainder when `pt >= olength`; then x is an
+    // integer below 10^6 that the test always passes.
+    let pt = exp + 1;
+    let mut out = String::with_capacity(digits.len() + 8);
+    if x < 0.0 {
+        out.push('-');
+    }
+    if -4 < pt && pt <= 6 {
+        if pt <= 0 {
+            out.push_str("0.");
+            out.extend(std::iter::repeat_n('0', (-pt) as usize));
+            out.push_str(&digits);
+        } else if pt >= olength {
+            out.push_str(&digits);
+            out.extend(std::iter::repeat_n('0', (pt - olength) as usize));
+            out.push_str(".0");
+        } else {
+            out.push_str(&digits[..pt as usize]);
+            out.push('.');
+            out.push_str(&digits[pt as usize..]);
+        }
+    } else {
+        out.push_str(&digits[..1]);
+        out.push('.');
+        out.push_str(if olength > 1 { &digits[1..] } else { "0" });
+        out.push('e');
+        out.push_str(&exp.to_string());
+    }
+    out
+}
+
 /// Julia `round(Int, x)`: to the nearest integer, ties to even, and an
 /// error (Julia throws an `InexactError`) if the result is not a finite
 /// number that fits an `Int`.
@@ -316,5 +394,48 @@ mod tests {
         let x = 1.0134;
         assert_eq!(powi(x, 4), 1.054687016657794);
         assert_eq!((x * x) * (x * x), 1.0546870166577942);
+    }
+    #[test]
+    fn floats_are_written_as_julia_writes_them() {
+        for (x, s) in [
+            (1.0, "1.0"),
+            (-0.0, "-0.0"),
+            (0.1, "0.1"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (12.3, "12.3"),
+            (-12.5, "-12.5"),
+            (100.0, "100.0"),
+            (1.0e5, "100000.0"),
+            (123456.0, "123456.0"),
+            (1.0e6, "1.0e6"),
+            (1234567.0, "1.234567e6"),
+            (0.0001, "0.0001"),
+            (2.5e-4, "0.00025"),
+            (1.0e-5, "1.0e-5"),
+            (1.5e300, "1.5e300"),
+            (5.0e-324, "5.0e-324"),
+            (f64::MAX, "1.7976931348623157e308"),
+            (f64::NAN, "NaN"),
+            (f64::INFINITY, "Inf"),
+            (f64::NEG_INFINITY, "-Inf"),
+        ] {
+            assert_eq!(float_string(x), s);
+        }
+    }
+
+    #[test]
+    fn round_with_digits() {
+        // 1.005 * 100 = 100.49999999999999; 2.675 * 100 = 267.5 exactly, a
+        // tie, rounded to even.
+        assert_eq!(round_digits(1.005, 2), 1.0);
+        assert_eq!(round_digits(2.675, 2), 2.68);
+        // Ties to even.
+        assert_eq!(round_digits(0.125, 2), 0.12);
+        assert_eq!(round_digits(12.345678, 1), 12.3);
+        let r = round_digits(-0.004, 2);
+        assert!(r == 0.0 && r.is_sign_negative());
+        assert!(round_digits(f64::NAN, 2).is_nan());
+        // x * 100 overflows: x itself.
+        assert_eq!(round_digits(1.0e308, 2), 1.0e308);
     }
 }
