@@ -558,23 +558,15 @@ fn row_sums(A: &[Vec<f64>]) -> Vec<f64> {
     A.iter().map(|r| r.iter().fold(0.0, |s, x| s + x)).collect()
 }
 
-/// Statistics.jl `cov([a b c])`: the covariance matrix of three series with
-/// the divisor `n - 1`.
+/// Statistics.jl `cov([a b c])`: the covariance matrix of three series,
+/// the products of the deviations multiplied by `1 / (n − 1)`.
 fn cov3(a: &[f64], b: &[f64], c: &[f64]) -> [[f64; 3]; 3] {
-    let n = a.len();
-    let cols = [a, b, c];
-    let centred: Vec<Vec<f64>> = cols
-        .iter()
-        .map(|x| {
-            let m = sum(x) / n as f64;
-            x.iter().map(|v| v - m).collect()
-        })
-        .collect();
+    let rows: Vec<Vec<f64>> = (0..a.len()).map(|t| vec![a[t], b[t], c[t]]).collect();
+    let m = crate::evaluation::cov_matrix(&rows);
     let mut C = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
-            let s = (0..n).fold(0.0, |s, k| s + centred[i][k] * centred[j][k]);
-            C[i][j] = s / (n - 1) as f64;
+            C[i][j] = m[i][j];
         }
     }
     C

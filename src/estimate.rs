@@ -271,12 +271,11 @@ fn ar1(ydata: &[f64]) -> Var {
     rfvar3(&y, 1, &vec![vec![1.0]; ydata.len()])
 }
 
-/// Julia `cov(var.u)` for residuals of one equation: the sample variance,
-/// divided by `n − 1`.
+/// Julia `cov(var.u)` for residuals of one equation, a 1×1 matrix: the
+/// squared deviations from the mean, multiplied by `1 / (n − 1)` as
+/// Statistics.jl does for matrices.
 fn variance(u: &[Vec<f64>]) -> f64 {
-    let n = u.len() as f64;
-    let mean = u.iter().map(|r| r[0]).sum::<f64>() / n;
-    u.iter().map(|r| (r[0] - mean) * (r[0] - mean)).sum::<f64>() / (n - 1.0)
+    crate::evaluation::cov_matrix(u)[0][0]
 }
 
 /// `estimate(ydata)`: coefficients of the AR(1) estimate and a shock with
