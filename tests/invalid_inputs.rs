@@ -20,7 +20,22 @@ fn invalid_inputs_give_an_error() {
     let mut q = p.clone();
     q.H_act = I;
     let e = error(&q, &ic);
-    assert!(e.contains("firm owners plus the bank owner"), "{e}");
+    assert!(
+        e.contains("less than the number of firm and bank owners, I + n_banks = 625"),
+        "{e}"
+    );
+
+    let mut q = p.clone();
+    q.n_banks = 0;
+    let e = error(&q, &ic);
+    assert!(e.contains("n_banks is 0"), "{e}");
+
+    // 624 firms drawn at random among 250 banks leave about 20 banks
+    // without firms.
+    let mut q = p.clone();
+    q.n_banks = 250;
+    let e = Model::new(&q, &ic, &mut Xoshiro::seed_from_u64(1)).unwrap_err();
+    assert!(e.contains("has no firms"), "{e}");
 
     let mut q = p.clone();
     q.H_act = I + 100;

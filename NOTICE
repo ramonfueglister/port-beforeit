@@ -7,11 +7,29 @@ This product is a translation into Rust of BeforeIT.jl
 BeforeIT.jl: Copyright 2024 - Banca d'Italia and the authors.
 Licensed under the Apache License, Version 2.0.
 
-The files in tests/data are converted from files of BeforeIT.jl
-(data/austria and test/matlab_code); see tests/data/README.md.
+The JSON files in data are converted from files of BeforeIT.jl (data; the
+two dates in data/italy/calibration.json are those of
+src/utils/standard_calibration_data.jl). In tests/data, the matlab_*.json
+files are converted from test/matlab_code of BeforeIT.jl and
+prediction_pipeline_2010Q1.json from test/deterministic/2010Q1.jld2. The
+other JSON files in tests/data are written by the Python scripts there
+(calibration_reference.py, evaluation_reference.py, analysis_reference.py),
+not converted from BeforeIT.jl. See data/README.md and tests/data/README.md.
+The files in examples/data are copied unchanged from examples/data of
+BeforeIT.jl.
 
 The changes with respect to BeforeIT.jl are described in README.md, section
 "Differences from BeforeIT.jl".
+
+src/plots.rs also follows errorline of StatsPlots.jl, mean and std of
+NaNMath.jl, the default attributes, minor ticks, axis widening and legend
+placement of Plots.jl, the gradients of PlotUtils.jl and ColorSchemes.jl
+and the bar plots of Makie.jl, and uses the colours of the default palette
+of Plots.jl (computed by PlotUtils.jl) and named colours of Colors.jl;
+these packages are under the MIT License. The gradients RdBu and YlOrRd
+are ColorBrewer colour schemes, as ColorSchemes.jl stores them:
+Copyright (c) 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania
+State University, licensed under the Apache License, Version 2.0.
 
 This product is not affiliated with or endorsed by the authors of
 BeforeIT.jl, Banca d'Italia or the Bank of England.

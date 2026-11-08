@@ -2,33 +2,197 @@
 //! appendix E). As in the Julia code, each variable is a list over all agents
 //! of a group: firm `i` is entry `i` of every firm list.
 
+use std::collections::HashMap;
+
 use crate::julia::{round_int, sum};
 use crate::params::{InitialConditions, Parameters};
 use crate::random::Randomness;
 
-/// Persons: the workers (`w_act`, employed and unemployed) or the
-/// economically inactive persons (`w_inact`), BeforeIT `Workers`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Workers {
-    /// Disposable income (A.53).
-    pub Y_h: Vec<f64>,
-    /// Deposits (A.54).
-    pub D_h: Vec<f64>,
-    /// Capital stock, dwellings (A.52).
-    pub K_h: Vec<f64>,
-    /// Wage (A.41).
-    pub w_h: Vec<f64>,
-    /// Employer: `Some(i)` works for firm `i`; `None` is unemployed (Julia 0)
-    /// or economically inactive (Julia −1).
-    pub O_h: Vec<Option<usize>>,
-    /// Consumption budget (A.46).
-    pub C_d_h: Vec<f64>,
-    /// Investment budget (A.49).
-    pub I_d_h: Vec<f64>,
-    /// Realised consumption (A.48).
-    pub C_h: Vec<f64>,
-    /// Realised investment (A.51).
-    pub I_h: Vec<f64>,
+/// A group of households: the fields of BeforeIT's agent types that
+/// `households_deposits(households, r, model)` reads. [`Workers`], [`Firms`]
+/// (their owners) and [`Banks`] (their owners) are households.
+pub trait Households {
+    /// Deposits.
+    fn D_h(&self) -> &[f64];
+    /// Disposable income.
+    fn Y_h(&self) -> &[f64];
+    /// Realised consumption.
+    fn C_h(&self) -> &[f64];
+    /// Realised investment.
+    fn I_h(&self) -> &[f64];
+}
+
+macro_rules! households {
+    ($t:ty) => {
+        impl Households for $t {
+            fn D_h(&self) -> &[f64] {
+                &self.D_h
+            }
+            fn Y_h(&self) -> &[f64] {
+                &self.Y_h
+            }
+            fn C_h(&self) -> &[f64] {
+                &self.C_h
+            }
+            fn I_h(&self) -> &[f64] {
+                &self.I_h
+            }
+        }
+    };
+}
+households!(Workers);
+households!(Firms);
+households!(Banks);
+
+/// Defines an agent type with IDs, BeforeIT `AgentsTypes` (firms and
+/// persons, `src/utils/modify.jl`): a struct with one list per variable and
+/// one entry per agent, a struct for the values of one agent (the named tuple
+/// of Julia's `getfields` and `push!`), and the functions that look up, add
+/// and remove agents by ID.
+macro_rules! agents_with_ids {
+    (
+        $(#[$m:meta])*
+        pub struct $many:ident;
+        $(#[$m1:meta])*
+        pub struct $one:ident;
+        { $( $(#[$fm:meta])* $f:ident: $t:ty, )* }
+    ) => {
+        $(#[$m])*
+        #[derive(Clone, Debug, Default, PartialEq)]
+        pub struct $many {
+            /// Whether an agent has been deleted; from the first deletion on,
+            /// `id_to_index` holds the position of every ID.
+            pub del: bool,
+            /// The last ID given out, `None` if there was never an agent.
+            pub lastid: Option<usize>,
+            /// Position of each ID, filled at the first deletion.
+            pub id_to_index: HashMap<usize, usize>,
+            /// ID of the agent at each position.
+            pub ID: Vec<usize>,
+            $( $(#[$fm])* pub $f: Vec<$t>, )*
+        }
+
+        $(#[$m1])*
+        #[derive(Clone, Copy, Debug, Default, PartialEq)]
+        pub struct $one {
+            $( $(#[$fm])* pub $f: $t, )*
+        }
+
+        impl $many {
+            /// Position of the agent with ID `id`, Julia
+            /// `get(structvec.id_to_index, id, id)`: the ID itself until an
+            /// agent is deleted. Julia's `structvec[id].field` is
+            /// `structvec.field[structvec.index(id)]` here.
+            #[inline]
+            pub fn index(&self, id: usize) -> usize {
+                if self.id_to_index.is_empty() {
+                    id
+                } else {
+                    self.id_to_index.get(&id).copied().unwrap_or(id)
+                }
+            }
+
+            /// The IDs of the agents, by position, Julia `allids`.
+            pub fn allids(&self) -> &[usize] {
+                &self.ID
+            }
+
+            /// The last ID given out, Julia `lastid` (`None` where Julia,
+            /// counting from 1, gives 0).
+            pub fn lastid(&self) -> Option<usize> {
+                self.lastid
+            }
+
+            /// The values of the agent with ID `id`, Julia
+            /// `getfields(structvec[id])`.
+            ///
+            /// # Panics
+            ///
+            /// If `index(id)` is not a position (Julia throws a `BoundsError`).
+            pub fn getfields(&self, id: usize) -> $one {
+                let i = self.index(id);
+                $one { $( $f: self.$f[i], )* }
+            }
+
+            /// Removes the agent with ID `id`, Julia `delete!(structvec, id)`:
+            /// the last agent moves to its position.
+            ///
+            /// # Panics
+            ///
+            /// If there is no agent with ID `id` (Julia throws a `KeyError`).
+            pub fn delete(&mut self, id: usize) {
+                if !self.del {
+                    self.del = true;
+                    for &pid in &self.ID {
+                        self.id_to_index.insert(pid, pid);
+                    }
+                }
+                let Some(&i) = self.id_to_index.get(&id) else {
+                    panic!("there is no agent with ID {id}");
+                };
+                self.ID.swap_remove(i);
+                $( self.$f.swap_remove(i); )*
+                self.id_to_index.remove(&id);
+                if i < self.ID.len() {
+                    self.id_to_index.insert(self.ID[i], i);
+                }
+            }
+
+            /// Adds an agent at the end with the next ID, `lastid + 1`, Julia
+            /// `push!(structvec, t)`. Julia checks at run time that the named
+            /// tuple has the fields of the container; here the type does.
+            pub fn push(&mut self, agent: $one) {
+                $( self.$f.push(agent.$f); )*
+                let id = self.lastid.map_or(0, |l| l + 1);
+                self.lastid = Some(id);
+                self.ID.push(id);
+                if self.del {
+                    self.id_to_index.insert(id, self.ID.len() - 1);
+                }
+            }
+        }
+    };
+}
+
+/// The values of `field` for the agents with the IDs `ids`, Julia
+/// `typeFloat[a.field for a in agents]` for a list of `Agent`s.
+pub(crate) fn gather(ids: &[usize], field: &[f64], index: impl Fn(usize) -> usize) -> Vec<f64> {
+    ids.iter().map(|&id| field[index(id)]).collect()
+}
+
+agents_with_ids! {
+    /// Persons: the workers (`w_act`, employed and unemployed) or the
+    /// economically inactive persons (`w_inact`), BeforeIT `Workers`.
+    ///
+    /// The first four fields identify the agents as in BeforeIT
+    /// `src/utils/modify.jl`. IDs start at 0; until an agent is deleted, the ID
+    /// of an agent is its position.
+    pub struct Workers;
+    /// One person: the values of [`Workers`] at one position.
+    pub struct Worker;
+    {
+        /// Disposable income (A.53).
+        Y_h: f64,
+        /// Deposits (A.54).
+        D_h: f64,
+        /// Capital stock, dwellings (A.52).
+        K_h: f64,
+        /// Wage (A.41).
+        w_h: f64,
+        /// Employer: `Some(i)` works for firm `i`; `None` is unemployed (Julia 0)
+        /// or economically inactive (Julia −1).
+        O_h: Option<usize>,
+        /// Consumption budget (A.46).
+        C_d_h: f64,
+        /// Investment budget (A.49).
+        I_d_h: f64,
+        /// Realised consumption (A.48).
+        C_h: f64,
+        /// Realised investment (A.51).
+        I_h: f64,
+        /// Bank of the person, from 0; the model constructor assigns it.
+        B_h: usize,
+    }
 }
 
 impl Workers {
@@ -41,11 +205,17 @@ impl Workers {
     }
 
     /// `Workers(parameters, initial_conditions)`: all workers start
-    /// unemployed; the inactive persons receive their social benefits.
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> (Workers, Workers) {
+    /// unemployed; the inactive persons receive their social benefits. The
+    /// active persons are the workers plus the `I` firm owners and the
+    /// `n_banks` bank owners.
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> (Workers, Workers) {
         let I: usize = p.I_s.iter().sum();
-        let H_W = p.H_act - I - 1;
+        let H_W = p.H_act - I - p.n_banks;
         let w_act = Workers {
+            del: false,
+            lastid: H_W.checked_sub(1),
+            id_to_index: HashMap::new(),
+            ID: (0..H_W).collect(),
             Y_h: vec![0.0; H_W],
             D_h: vec![0.0; H_W],
             K_h: vec![0.0; H_W],
@@ -55,10 +225,15 @@ impl Workers {
             I_d_h: vec![0.0; H_W],
             C_h: vec![0.0; H_W],
             I_h: vec![0.0; H_W],
+            B_h: vec![0; H_W],
         };
         let P_bar_HH = 1.0;
         let Y_h = vec![(ic.sb_inact + ic.sb_other) * P_bar_HH; p.H_inact];
         let w_inact = Workers {
+            del: false,
+            lastid: p.H_inact.checked_sub(1),
+            id_to_index: HashMap::new(),
+            ID: (0..p.H_inact).collect(),
             D_h: Y_h.iter().map(|y| ic.D_H * y).collect(),
             K_h: Y_h.iter().map(|y| ic.K_H * y).collect(),
             Y_h,
@@ -68,92 +243,99 @@ impl Workers {
             I_d_h: vec![0.0; p.H_inact],
             C_h: vec![0.0; p.H_inact],
             I_h: vec![0.0; p.H_inact],
+            B_h: vec![0; p.H_inact],
         };
         (w_act, w_inact)
     }
 }
 
-/// Firms and their owners (one investor household per firm), BeforeIT
-/// `Firms`.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Firms {
-    /// Sector, from 0 (Julia from 1).
-    pub G_i: Vec<usize>,
-    pub alpha_bar_i: Vec<f64>,
-    pub beta_i: Vec<f64>,
-    pub kappa_i: Vec<f64>,
-    /// Wage (A.26).
-    pub w_i: Vec<f64>,
-    pub w_bar_i: Vec<f64>,
-    pub delta_i: Vec<f64>,
-    pub tau_Y_i: Vec<f64>,
-    pub tau_K_i: Vec<f64>,
-    /// Employees (A.24).
-    pub N_i: Vec<i64>,
-    /// Production (A.13).
-    pub Y_i: Vec<f64>,
-    /// Sales (A.2).
-    pub Q_i: Vec<f64>,
-    /// Demand (A.1).
-    pub Q_d_i: Vec<f64>,
-    /// Price (A.8).
-    pub P_i: Vec<f64>,
-    /// Inventories of finished goods (A.4).
-    pub S_i: Vec<f64>,
-    /// Capital stock (A.17).
-    pub K_i: Vec<f64>,
-    /// Stock of intermediate inputs (A.21).
-    pub M_i: Vec<f64>,
-    /// Loans (A.35).
-    pub L_i: Vec<f64>,
-    /// Operating margin (appendix E.1).
-    pub pi_bar_i: Vec<f64>,
-    /// Deposits (A.34).
-    pub D_i: Vec<f64>,
-    /// Profits (A.30).
-    pub Pi_i: Vec<f64>,
-    /// Vacancies; 0 after initialisation, the labour market computes them
-    /// anew each quarter.
-    pub V_i: Vec<i64>,
-    /// Realised investment (A.16).
-    pub I_i: Vec<f64>,
-    /// Equity (A.36).
-    pub E_i: Vec<f64>,
-    /// Average price paid for intermediate inputs.
-    pub P_bar_i: Vec<f64>,
-    /// Average price paid for investment goods.
-    pub P_CF_i: Vec<f64>,
-    /// Change in inventories (A.3).
-    pub DS_i: Vec<f64>,
-    /// Intermediate inputs bought (A.20).
-    pub DM_i: Vec<f64>,
-    /// New loans granted (A.64).
-    pub DL_i: Vec<f64>,
-    /// Desired new loans (A.29).
-    pub DL_d_i: Vec<f64>,
-    /// Expected capital stock, at expected prices (A.63).
-    pub K_e_i: Vec<f64>,
-    /// Expected loans (A.63).
-    pub L_e_i: Vec<f64>,
-    /// Expected sales, which is the planned supply (A.5).
-    pub Q_s_i: Vec<f64>,
-    /// Desired investment (A.14).
-    pub I_d_i: Vec<f64>,
-    /// Desired intermediate inputs (A.18).
-    pub DM_d_i: Vec<f64>,
-    /// Desired employees (A.22).
-    pub N_d_i: Vec<i64>,
-    /// Expected profits (A.28).
-    pub Pi_e_i: Vec<f64>,
-    /// The owner household: income, budgets, consumption, investment,
-    /// capital stock and deposits, as in [`Workers`].
-    pub Y_h: Vec<f64>,
-    pub C_d_h: Vec<f64>,
-    pub I_d_h: Vec<f64>,
-    pub C_h: Vec<f64>,
-    pub I_h: Vec<f64>,
-    pub K_h: Vec<f64>,
-    pub D_h: Vec<f64>,
+agents_with_ids! {
+    /// Firms and their owners (one investor household per firm), BeforeIT
+    /// `Firms`. The first four fields identify the firms, as in [`Workers`].
+    pub struct Firms;
+    /// One firm and its owner: the values of [`Firms`] at one position.
+    pub struct Firm;
+    {
+        /// Sector, from 0 (Julia from 1).
+        G_i: usize,
+        alpha_bar_i: f64,
+        beta_i: f64,
+        kappa_i: f64,
+        /// Wage (A.26).
+        w_i: f64,
+        w_bar_i: f64,
+        delta_i: f64,
+        tau_Y_i: f64,
+        tau_K_i: f64,
+        /// Employees (A.24).
+        N_i: i64,
+        /// Production (A.13).
+        Y_i: f64,
+        /// Sales (A.2).
+        Q_i: f64,
+        /// Demand (A.1).
+        Q_d_i: f64,
+        /// Price (A.8).
+        P_i: f64,
+        /// Inventories of finished goods (A.4).
+        S_i: f64,
+        /// Capital stock (A.17).
+        K_i: f64,
+        /// Stock of intermediate inputs (A.21).
+        M_i: f64,
+        /// Loans (A.35).
+        L_i: f64,
+        /// Operating margin (appendix E.1).
+        pi_bar_i: f64,
+        /// Deposits (A.34).
+        D_i: f64,
+        /// Profits (A.30).
+        Pi_i: f64,
+        /// Vacancies; 0 after initialisation, the labour market computes them
+        /// anew each quarter.
+        V_i: i64,
+        /// Realised investment (A.16).
+        I_i: f64,
+        /// Equity (A.36).
+        E_i: f64,
+        /// Average price paid for intermediate inputs.
+        P_bar_i: f64,
+        /// Average price paid for investment goods.
+        P_CF_i: f64,
+        /// Change in inventories (A.3).
+        DS_i: f64,
+        /// Intermediate inputs bought (A.20).
+        DM_i: f64,
+        /// New loans granted (A.64).
+        DL_i: f64,
+        /// Desired new loans (A.29).
+        DL_d_i: f64,
+        /// Expected capital stock, at expected prices (A.63).
+        K_e_i: f64,
+        /// Expected loans (A.63).
+        L_e_i: f64,
+        /// Expected sales, which is the planned supply (A.5).
+        Q_s_i: f64,
+        /// Desired investment (A.14).
+        I_d_i: f64,
+        /// Desired intermediate inputs (A.18).
+        DM_d_i: f64,
+        /// Desired employees (A.22).
+        N_d_i: i64,
+        /// Expected profits (A.28).
+        Pi_e_i: f64,
+        /// Bank of the firm, from 0; the model constructor assigns it.
+        B_i: usize,
+        /// The owner household: income, budgets, consumption, investment,
+        /// capital stock and deposits, as in [`Workers`].
+        Y_h: f64,
+        C_d_h: f64,
+        I_d_h: f64,
+        C_h: f64,
+        I_h: f64,
+        K_h: f64,
+        D_h: f64,
+    }
 }
 
 impl Firms {
@@ -175,7 +357,7 @@ impl Firms {
     }
 
     /// `Firms(parameters, initial_conditions)` (online appendix E.1).
-    pub(crate) fn new<R: Randomness + ?Sized>(
+    pub fn new<R: Randomness + ?Sized>(
         p: &Parameters,
         ic: &InitialConditions,
         rng: &mut R,
@@ -234,6 +416,10 @@ impl Firms {
             .collect();
         let zeros = vec![0.0; I];
         Ok(Firms {
+            del: false,
+            lastid: I.checked_sub(1),
+            id_to_index: HashMap::new(),
+            ID: (0..I).collect(),
             V_i: N_i.clone(),
             Q_d_i: Y_i.clone(),
             K_h: Y_h.iter().map(|y| ic.K_H * y).collect(),
@@ -273,6 +459,7 @@ impl Firms {
             DM_d_i: zeros.clone(),
             N_d_i: vec![0; I],
             Pi_e_i: zeros.clone(),
+            B_i: vec![0; I],
             Y_h,
             C_d_h: zeros.clone(),
             I_d_h: zeros.clone(),
@@ -282,40 +469,83 @@ impl Firms {
     }
 }
 
-/// The bank and its owner household (appendix A.4: one bank, as in the
-/// paper). BeforeIT `Banks` with one bank.
+/// The banks and their owner households, BeforeIT `Banks`: entry `k` of
+/// every list is bank `k`. The paper has one bank (appendix A.4);
+/// BeforeIT.jl allows several (`n_banks`), each with its own customers.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Bank {
+pub struct Banks {
+    /// The fields that identify the banks, as in [`Workers`]. BeforeIT.jl
+    /// adds and deletes only firms and persons, never banks.
+    pub del: bool,
+    pub lastid: Option<usize>,
+    pub id_to_index: HashMap<usize, usize>,
+    pub ID: Vec<usize>,
     /// Equity (A.67).
-    pub E_k: f64,
+    pub E_k: Vec<f64>,
     /// Profits (A.65).
-    pub Pi_k: f64,
+    pub Pi_k: Vec<f64>,
     /// Expected profits (A.45).
-    pub Pi_e_k: f64,
+    pub Pi_e_k: Vec<f64>,
     /// Net position at the central bank: reserves if positive, advances if
     /// negative (A.68).
-    pub D_k: f64,
+    pub D_k: Vec<f64>,
     /// Lending rate (A.66).
-    pub r: f64,
-    /// The owner household: income, budgets, consumption, investment,
+    pub r: Vec<f64>,
+    /// The owner households: income, budgets, consumption, investment,
     /// capital stock and deposits, as in [`Workers`].
-    pub Y_h: f64,
-    pub C_d_h: f64,
-    pub I_d_h: f64,
-    pub C_h: f64,
-    pub I_h: f64,
-    pub K_h: f64,
-    pub D_h: f64,
+    pub Y_h: Vec<f64>,
+    pub C_d_h: Vec<f64>,
+    pub I_d_h: Vec<f64>,
+    pub C_h: Vec<f64>,
+    pub I_h: Vec<f64>,
+    pub K_h: Vec<f64>,
+    pub D_h: Vec<f64>,
+    /// IDs of each bank's firms (Julia: lists of `Agent`s), set by the model
+    /// constructor. As in BeforeIT.jl, adding or deleting firms and persons
+    /// does not change these lists.
+    pub firms: Vec<Vec<usize>>,
+    /// IDs of each bank's workers.
+    pub w_act: Vec<Vec<usize>>,
+    /// IDs of each bank's inactive persons.
+    pub w_inact: Vec<Vec<usize>>,
 }
 
-impl Bank {
-    /// `Banks(parameters, initial_conditions)` with one bank. Profit,
-    /// reserves and the owner household are set in [`crate::Model::new`].
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> Bank {
-        Bank {
-            E_k: ic.E_k,
-            r: ic.r_bar + p.mu,
-            ..Bank::default()
+impl Banks {
+    pub fn len(&self) -> usize {
+        self.E_k.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.E_k.is_empty()
+    }
+
+    /// `Banks(parameters, initial_conditions)`: `n_banks` banks with equal
+    /// shares of the sector's equity `E_k`. Profits, reserves, the owner
+    /// households and the customers are set in
+    /// [`crate::AbstractModel::from_agents`].
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> Banks {
+        let B = p.n_banks;
+        let zeros = vec![0.0; B];
+        Banks {
+            del: false,
+            lastid: B.checked_sub(1),
+            id_to_index: HashMap::new(),
+            ID: (0..B).collect(),
+            E_k: vec![ic.E_k / B as f64; B],
+            Pi_k: zeros.clone(),
+            Pi_e_k: zeros.clone(),
+            D_k: zeros.clone(),
+            r: vec![ic.r_bar + p.mu; B],
+            Y_h: zeros.clone(),
+            C_d_h: zeros.clone(),
+            I_d_h: zeros.clone(),
+            C_h: zeros.clone(),
+            I_h: zeros.clone(),
+            K_h: zeros.clone(),
+            D_h: zeros,
+            firms: vec![Vec::new(); B],
+            w_act: vec![Vec::new(); B],
+            w_inact: vec![Vec::new(); B],
         }
     }
 }
@@ -337,7 +567,7 @@ pub struct CentralBank {
 }
 
 impl CentralBank {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> CentralBank {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> CentralBank {
         CentralBank {
             r_bar: ic.r_bar,
             r_G: p.r_G,
@@ -376,7 +606,7 @@ pub struct Government {
 }
 
 impl Government {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> Government {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> Government {
         Government {
             alpha_G: p.alpha_G,
             beta_G: p.beta_G,
@@ -440,7 +670,7 @@ pub struct RestOfTheWorld {
 }
 
 impl RestOfTheWorld {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> RestOfTheWorld {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> RestOfTheWorld {
         RestOfTheWorld {
             alpha_E: p.alpha_E,
             beta_E: p.beta_E,
@@ -505,7 +735,7 @@ pub struct Aggregates {
 }
 
 impl Aggregates {
-    pub(crate) fn new(p: &Parameters, ic: &InitialConditions) -> Aggregates {
+    pub fn new(p: &Parameters, ic: &InitialConditions) -> Aggregates {
         Aggregates {
             Y: ic.Y.clone(),
             pi_: ic.pi.clone(),

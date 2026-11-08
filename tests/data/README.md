@@ -6,24 +6,82 @@ Reference data for the tests, converted to JSON from files of
 
 | File here | Source in BeforeIT.jl | Content |
 |---|---|---|
-| `austria_2010q1_parameters.json` | `data/austria/parameters/2010Q1.jld2` | Parameters of the Austrian calibration for 2010Q1 |
-| `austria_2010q1_initial_conditions.json` | `data/austria/initial_conditions/2010Q1.jld2` | Initial conditions for 2010Q1 |
 | `matlab_init_vars_firms.json` | `test/matlab_code/init_vars_firms.mat` | Initial state of the firms, MATLAB code |
 | `matlab_init_vars_bank.json` | `test/matlab_code/init_vars_bank.mat` | Initial state of the bank, MATLAB code |
 | `matlab_init_vars_households.json` | `test/matlab_code/init_vars_households.mat` | Initial state of the households, MATLAB code |
 | `matlab_output_t1.json` | `test/matlab_code/output_t1.mat` | Aggregates after one quarter without randomness, MATLAB code |
 | `matlab_output_t5.json` | `test/matlab_code/output_t5.mat` | Aggregates after five quarters without randomness, MATLAB code |
+| `prediction_pipeline_2010Q1.json` | `test/deterministic/2010Q1.jld2` | `model_dict`: the predictions of BeforeIT.jl's test `test/deterministic/prediction_pipeline.jl` |
 
 BeforeIT.jl uses the `.mat` files in its own tests as the values of the
-original MATLAB implementation of the model. BeforeIT.jl is licensed under
+original MATLAB implementation of the model, and `2010Q1.jld2` as the
+values of BeforeIT.jl itself for its prediction pipeline (calibration,
+two runs without randomness, predictions). BeforeIT.jl is licensed under
 the Apache License 2.0, Copyright 2024 Banca d'Italia and the authors.
 
-`convert.py` does the conversion; run on a checkout of BeforeIT.jl at the
-commit above, it reproduces these files byte for byte:
+`convert.py` does the conversion (with `numpy`, `scipy` and `h5py`); run on
+a checkout of BeforeIT.jl at the commit above, it reproduces these files
+byte for byte:
 
 ```sh
 python3 tests/data/convert.py path/to/BeforeIT.jl tests/data
 ```
 
 Matrices are stored in Julia orientation (row `r`, column `c` is `A[r, c]`),
-and the keys keep the names of the original files.
+and the keys keep the names of the original files. In
+`prediction_pipeline_2010Q1.json` a row is a quarter or a year and a column
+a run.
+
+## Reference values of the calibration
+
+`calibration_italy_2010-03-31.json` and
+`calibration_italy_2019-12-31_growth.json` are not converted from
+BeforeIT.jl. `calibration_reference.py`, an independent NumPy translation of
+`get_params_and_initial_conditions` in BeforeIT `src/utils/calibration.jl`,
+computes them from `data/italy/calibration.json` (scale 0.001, the second
+with `use_growth_rate_ar1`):
+
+```sh
+python3 tests/data/calibration_reference.py data/italy/calibration.json 2010-03-31 0.001 0 tests/data/calibration_italy_2010-03-31.json
+python3 tests/data/calibration_reference.py data/italy/calibration.json 2019-12-31 0.001 1 tests/data/calibration_italy_2019-12-31_growth.json
+```
+
+The translation shares no code with the port, so the comparison in
+`tests/calibration.rs` checks that both read the Julia code the same way. It
+does not check against values of Julia. `tests/predictions.rs` does, for
+one calibration (2010Q1, scale 0.0001), through the model runs and
+predictions that follow it.
+
+## Reference values of the forecast evaluation
+
+`evaluation_reference.json` holds pseudo-random inputs and the results of
+`evaluation_reference.py`, an independent NumPy/SciPy translation of
+BeforeIT's `dmtest.jl`, `mztest.jl`, `bias_ttest.jl`, `varx.jl` and
+`correlation_utils.jl` (SciPy's normal and χ² distributions, NumPy's
+`linalg` for the HP filter and least squares):
+
+```sh
+python3 tests/data/evaluation_reference.py tests/data/evaluation_reference.json
+```
+
+`tests/evaluation.rs` compares the port with it. As for the calibration,
+this checks that both read the Julia code the same way, not against values
+of Julia.
+
+## Reference values of the error tables
+
+`analysis_reference.json` holds the results of `analysis_reference.py`, an
+independent NumPy/SciPy translation of BeforeIT's `error_tables.jl` and
+`analysis_utils.jl`: the text of every table that `tests/analysis.rs`
+writes, computed from the predictions that the port writes in that test.
+It also holds the series of those predictions that the tables read, and the
+test checks that the run reproduces them. To recompute it, run the test
+once (it leaves its files in `target/tmp/analysis`), then:
+
+```sh
+python3 tests/data/analysis_reference.py target/tmp/analysis data/italy/calibration.json tests/data/analysis_reference.json
+```
+
+The predictions themselves are the port's, so the comparison checks the
+tables and the benchmarks, not the model runs; `tests/predictions.rs`
+checks the predictions against values of Julia.
